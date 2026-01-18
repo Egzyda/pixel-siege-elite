@@ -792,7 +792,7 @@ function useSkill() {
         case 'angel':
             state.units.push({
                 key: 'angel',
-                def: { hp: 800, dmg: 70, range: 120, speed: 0.8, rate: 40, type: 'ranged', mass: 2, kb: 5, sprite: SPRITES.knight },
+                def: { hp: 800, dmg: 70, range: 120, speed: 0.8, rate: 40, type: 'ranged', mass: 2, kb: 5, sprite: SPRITES.angel },
                 isP: true,
                 x: state.w / 2,
                 y: state.h - 100,
@@ -806,7 +806,7 @@ function useSkill() {
                 vx: 0, vy: 0,
                 anim: 0,
                 flash: 0,
-                pal: PALETTES.knight,
+                pal: PALETTES.angel,
                 update: Unit.prototype.update,
                 attack: Unit.prototype.attack,
                 takeDmg: Unit.prototype.takeDmg,
@@ -825,9 +825,89 @@ function useSkill() {
 }
 
 /**
+ * --- SAVE/LOAD SYSTEM ---
+ */
+function saveGame() {
+    const saveData = {
+        wave: state.wave,
+        pHP: state.pHP,
+        maxHP: state.maxHP,
+        mana: state.mana,
+        maxMana: state.maxMana,
+        deck: state.deck,
+        skill: state.skill,
+        upgrades: state.upgrades,
+        atkMult: state.atkMult,
+        hpMult: state.hpMult,
+        speedMult: state.speedMult,
+        rangeMult: state.rangeMult,
+        rateMult: state.rateMult,
+        costMult: state.costMult,
+        manaRate: state.manaRate,
+        baseRegen: state.baseRegen
+    };
+    localStorage.setItem('pixelSiegeEliteSave', JSON.stringify(saveData));
+}
+
+function loadGame() {
+    const saveStr = localStorage.getItem('pixelSiegeEliteSave');
+    if(!saveStr) return false;
+
+    try {
+        const saveData = JSON.parse(saveStr);
+
+        document.getElementById('title-screen').classList.add('hidden');
+
+        // Restore state
+        state.wave = saveData.wave;
+        state.pHP = saveData.pHP;
+        state.maxHP = saveData.maxHP;
+        state.mana = saveData.mana;
+        state.maxMana = saveData.maxMana;
+        state.deck = saveData.deck;
+        state.skill = saveData.skill;
+        state.upgrades = saveData.upgrades;
+        state.atkMult = saveData.atkMult;
+        state.hpMult = saveData.hpMult;
+        state.speedMult = saveData.speedMult;
+        state.rangeMult = saveData.rangeMult;
+        state.rateMult = saveData.rateMult;
+        state.costMult = saveData.costMult;
+        state.manaRate = saveData.manaRate;
+        state.baseRegen = saveData.baseRegen;
+
+        state.scene = 'battle';
+        state.units = [];
+        state.projs = [];
+        state.popups = [];
+        state.fx = [];
+        state.boss = null;
+        state.waitingForBoss = false;
+
+        startWave(state.wave);
+        createControls();
+        updateUI();
+
+        return true;
+    } catch(e) {
+        console.error('Failed to load save:', e);
+        return false;
+    }
+}
+
+function hasSavedGame() {
+    return !!localStorage.getItem('pixelSiegeEliteSave');
+}
+
+function deleteSave() {
+    localStorage.removeItem('pixelSiegeEliteSave');
+}
+
+/**
  * --- GAME FLOW ---
  */
 function startGame() {
+    deleteSave(); // Clear any existing save when starting new game
     document.getElementById('title-screen').classList.add('hidden');
 
     const allUnits = ['knight', 'archer', 'wizard', 'healer', 'giant'];
@@ -1004,6 +1084,7 @@ function selectReward(idx) {
         startWave(state.wave);
         createControls();
         updateUI();
+        saveGame(); // Auto-save after choosing reward
     } else {
         endGame(true);
     }
@@ -1030,6 +1111,7 @@ function applyUpgrade(key) {
 
 function endGame(win) {
     state.scene = 'gameover';
+    deleteSave(); // Clear save when game ends
     const m = document.getElementById('modal');
     m.style.display = 'flex';
     const t = document.getElementById('modal-title');
@@ -1054,6 +1136,12 @@ function backToTitle() {
     state.boss = null;
     state.skill = null;
     state.upgrades = [];
+
+    // Update Continue button visibility
+    const continueBtn = document.getElementById('btn-continue');
+    if(continueBtn) {
+        continueBtn.style.display = hasSavedGame() ? 'block' : 'none';
+    }
 }
 
 /**
@@ -1062,6 +1150,13 @@ function backToTitle() {
 function init() {
     window.addEventListener('resize', resize);
     resize();
+
+    // Show/hide Continue button based on save data
+    const continueBtn = document.getElementById('btn-continue');
+    if(continueBtn && hasSavedGame()) {
+        continueBtn.style.display = 'block';
+    }
+
     requestAnimationFrame(loop);
 }
 
