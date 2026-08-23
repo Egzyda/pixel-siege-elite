@@ -25,6 +25,7 @@ const state = {
     aiRoster: [],             // AI 編成 [{id, key, x, y}]
     aiGold: 0,                // AI の残予算（繰り越し用）
     aiPower: 1,               // AI が余剰予算で得た編成強化倍率
+    aiPersonality: null,      // AI の「好み」（試合開始時に抽選、試合中は固定）
     nextId: 1,
 
     units: [],                // バトル中のユニット実体
@@ -860,6 +861,16 @@ function analyzeRoster(roster) {
 // プレイヤー編成に刺さるようウェイトを補正したプールを返す
 function counteredPool(preset, roster) {
     const base = preset.pool.map(p => ({ key: p.key, w: p.w }));
+
+    // AI 自身の「好み」を常時反映する（対策とは独立。EASY はシンプルに保つため対象外）
+    if(state.difficulty !== 'easy' && state.aiPersonality) {
+        const bias = state.aiPersonality.bias;
+        Object.keys(bias).forEach(k => {
+            if(!base.some(p => p.key === k)) base.push({ key: k, w: 0.6 });
+        });
+        base.forEach(p => { p.w *= (bias[p.key] || 1); });
+    }
+
     const strength = preset.counterStrength || 0;
 
     // 1 ラウンド目や EASY は対策しない
@@ -871,13 +882,18 @@ function counteredPool(preset, roster) {
     const comp = analyzeRoster(roster);
     const notes = [];
     const boosts = {};
+    const variance = AI_COUNTER_VARIANCE[state.difficulty] || { skipChance: 0, varianceMin: 1, varianceMax: 1 };
 
     AI_COUNTER_RULES.forEach(rule => {
         if(!rule.when(comp)) return;
+        // 条件を満たしても一定確率で見送り、ワンパターンな対策にならないようにする
+        // （HARD は skipChance を低く抑えてあるため、対策の信頼性は落ちない）
+        if(Math.random() < variance.skipChance) return;
         notes.push(rule.note);
         Object.keys(rule.boost).forEach(k => {
-            // strength が小さいほど補正が穏やかになる
-            const mult = 1 + (rule.boost[k] - 1) * strength;
+            // strength が小さいほど補正が穏やかになる。強さ自体にもブレを持たせる
+            const v = randRange(variance.varianceMin, variance.varianceMax);
+            const mult = 1 + (rule.boost[k] - 1) * strength * v;
             boosts[k] = (boosts[k] || 1) * mult;
         });
     });
@@ -893,6 +909,15 @@ function counteredPool(preset, roster) {
 
 // AI の編成を組む（難易度プリセット + プレイヤー編成への対策）
 function buildAiRoster() {
+    // SURVIVAL は「メカベラム方式」: 前ラウンドの編成を引き継がず、その時点で
+    // 持っているはずの資金全額で毎ラウンド編成を新しく組み直す。
+    // （プレイヤーと全く同じ条件を保つ必要があるのは VERSUS だけなので、
+    // 編成を引き継ぐ現行方式は VERSUS のみ残す）
+    if(state.mode === 'survival') {
+        state.aiRoster.forEach(r => { state.aiGold += UNIT_DEFS[r.key].cost; });
+        state.aiRoster = [];
+    }
+
     const preset = AI_PRESETS[state.difficulty];
     // 序盤にいきなり差がつかないよう、予算補正は数ラウンドかけて効いてくる
     const ramp = 1 + (preset.budgetMult - 1) * Math.min(1, state.round / 3);
@@ -1445,6 +1470,9 @@ function startNewGame(mode) {
     state.aiGold = 0;
     state.aiPower = 1;
     state.aiNote = '';
+    // AI の「好み」を試合開始時に1つ抽選する（試合中は固定。STORYは対象外）
+    state.aiPersonality = (mode === 'story') ? null
+        : AI_PERSONALITIES[Math.floor(Math.random() * AI_PERSONALITIES.length)];
     state.nextId = 1;
     state.upgrades = {};
     state.unitLevels = {};
@@ -1458,6 +1486,12 @@ function startNewGame(mode) {
     if(mode === 'story') toast('STORY モード開始');
     else if(mode === 'survival') toast(`SURVIVAL 開始（${diff}）— 配置上限なし`);
     else toast(`VERSUS 開始（${diff}）— 体力 ${VERSUS_LIFE} / 配置上限なし`);
+
+    // AI自身の編成の傾向（対策とは別のクセ）を知らせる。対策ヒントと同じ
+    // ディレイを使い、開始直後のトーストと表示が入れ替わるようにする
+    if(state.aiPersonality && state.difficulty !== 'easy') {
+        setTimeout(() => toast('敵の傾向: ' + state.aiPersonality.note), 350);
+    }
 }
 
 function backToTitle() {
@@ -1489,6 +1523,7 @@ function saveGame() {
             round: state.round, gold: state.gold,
             roster: state.roster, aiRoster: state.aiRoster, aiGold: state.aiGold,
             aiPower: state.aiPower, playerLife: state.playerLife, aiLife: state.aiLife,
+            aiPersonalityName: state.aiPersonality ? state.aiPersonality.name : null,
             upgrades: state.upgrades, unitLevels: state.unitLevels, tactics: state.tactics, nextId: state.nextId
         }));
     } catch(e) { /* 保存できない環境では何もしない */ }
@@ -1517,6 +1552,7 @@ function loadGame() {
         state.aiPower = s.aiPower || 1;
         state.playerLife = s.playerLife === undefined ? VERSUS_LIFE : s.playerLife;
         state.aiLife = s.aiLife === undefined ? VERSUS_LIFE : s.aiLife;
+        state.aiPersonality = AI_PERSONALITIES.find(p => p.name === s.aiPersonalityName) || null;
         state.upgrades = s.upgrades || {};
         state.unitLevels = s.unitLevels || {};
         state.tactics = s.tactics || {};
@@ -1613,7 +1649,7 @@ function buildUnitCard(key, opts) {
             <span class="card-type">${reachLabel(def)}</span>
             ${splash ? '<span class="card-type splash">範囲</span>' : ''}
             ${role ? `<span class="card-type">${role}</span>` : ''}
-            ${o.enemy ? '' : `<span class="card-lv">Lv.${lvl + 1}</span>`}
+            <span class="card-lv">Lv.${lvl + 1}</span>
             ${o.owned ? `<span class="card-own">×${o.owned}</span>` : ''}
         </div>`;
     head.appendChild(id);
@@ -1786,6 +1822,13 @@ function showUnitInfo(key, isP, sx, sy, sellEntry) {
             hideUnitInfo();
         });
         box.appendChild(sell);
+    } else if(isP && state.scene === 'prep') {
+        // 準備フェーズで自ユニットをタップしたが売却できない
+        // （前ラウンド以前から編成にいるユニットは売却対象外）場合の説明
+        const note = document.createElement('div');
+        note.className = 'card-note';
+        note.textContent = '前ラウンド以前から編成にいるユニットは売却できません';
+        box.appendChild(note);
     }
 
     box.classList.add('show');
@@ -2052,7 +2095,8 @@ function onPointerDown(e) {
             id: state.nextId++,
             key: state.selected,
             x: clamp(p.x, 16, state.w - 16),
-            y: clamp(p.y, lay.deployTop, lay.deployBottom)
+            y: clamp(p.y, lay.deployTop, lay.deployBottom),
+            boughtRound: state.round // このラウンド購入分だけ売却可能にするための記録
         });
         if(state.gold < def.cost) state.selected = null; // もう買えないなら選択解除
         renderShop();
@@ -2098,8 +2142,11 @@ function onPointerUp(e) {
     if(!d.moved) {
         // タップだけなら即売却はせず、説明カードを開いて売却ボタンで選ばせる
         // （移動のつもりでタップした際に誤って売れてしまうのを防ぐため）
+        // 売却できるのは今ラウンドに購入した分のみ（前ラウンド以前から編成に
+        // いるユニットは、全回復して使い続けられる代わりに売却対象外にする）
         const p = canvasPos(e);
-        showUnitInfo(d.entry.key, true, p.x, p.y, d.entry);
+        const sellable = d.entry.boughtRound === state.round;
+        showUnitInfo(d.entry.key, true, p.x, p.y, sellable ? d.entry : null);
     } else {
         saveGame();
     }

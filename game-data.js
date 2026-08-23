@@ -374,6 +374,30 @@ const AI_COUNTER_RULES = [
     }
 ];
 
+// ============================================================
+// AI の「好み」。VERSUS / SURVIVAL の対戦開始時にランダムで1つ選ばれ、
+// 試合中は変わらない。対策編成（プレイヤー編成への反応）とは独立して
+// 常時ウェイトに乗る、AI 自身の一貫したクセ。プレイヤーから見ても
+// パターンとして学習・対策できるよう、開始時にヒント表示する。
+// EASY は挙動をシンプルに保つため対象外。
+// ============================================================
+const AI_PERSONALITIES = [
+    { name:'物量型',   note:'安いユニットを並べる物量型で挑んできた', bias:{ goblin:1.9, skeleton:1.5, imp:1.4 } },
+    { name:'重装型',   note:'重量級中心の重装型で挑んできた',         bias:{ giant:1.9, orc:1.6, warlord:1.7 } },
+    { name:'遠距離型', note:'遠距離火力に寄せた編成で挑んできた',     bias:{ archer:1.6, wizard:1.8, skeleton:1.5, lich:1.7, drake:1.6 } },
+    { name:'バランス型', note:'偏りのないバランス編成で挑んできた',   bias:{} }
+];
+
+// 対策編成の“ブレ”設定（difficulty ごと）。
+//   skipChance       … 対策条件を満たしても見送る確率（ワンパターン化防止）
+//   varianceMin/Max  … 対策が発動した時の補正の強さのブレ幅
+// HARD は skipChance を低く抑え、対策の信頼性（弱いプレイにしない）を優先する
+const AI_COUNTER_VARIANCE = {
+    easy:   { skipChance: 0,    varianceMin: 1,    varianceMax: 1 },
+    normal: { skipChance: 0.25, varianceMin: 0.7,  varianceMax: 1.3 },
+    hard:   { skipChance: 0.08, varianceMin: 0.85, varianceMax: 1.25 }
+};
+
 // AI が余らせた予算を編成強化に変換する設定
 // 掛け算で積むと指数的に膨れ上がるため、加算 + 上限で頭打ちにする
 const AI_POWER_UNIT = 60;     // このゴールドごとに
