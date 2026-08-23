@@ -270,6 +270,14 @@ const UPGRADE_DEFS = {
     vampire:     { name:'吸血の紋章', icon:'🧛', cost:40, desc:'与えたダメージの10%を自己回復（上限50%）' }
 };
 
+// atk_boost 等は複利で伸びるため、thorns/vampire と同様に上限を設ける
+// （fortified/regen は加算のみで際限なく伸びないため対象外）
+const ATK_MULT_CAP  = 3.0;  // 攻撃力 最大 +200%
+const HP_MULT_CAP   = 3.5;  // HP 最大 +250%
+const RATE_MULT_MIN = 0.35; // 攻撃間隔は最短でも元の35%まで
+const MOVE_MULT_CAP = 2.2;  // 移動速度 最大 +120%
+const RANGE_MULT_CAP = 2.0; // 射程 最大 +100%
+
 // ============================================================
 // ユニット個別レベルアップ（ショップのユニットカードから購入）
 // 特定のユニット種を強化すると、そのユニット全員（既に配置済み/今後購入分の
@@ -278,10 +286,13 @@ const UPGRADE_DEFS = {
 // おおよそステータス2倍相当になる」を基準に設計。価格の伸び率(1.15倍/回)を
 // 効果の伸び率(1.15倍/回)とそろえてあるため、レベルを重ねても
 // 「金額に対する効果」が目減りしていかない（＝どのタイミングで注ぎ込んでも損しない）。
+// ただし複利のまま無制限だと、1種だけに注ぎ込み続けた際に際限なく強くなって
+// しまう（例: Lv30 で約66倍）ため、UNIT_LEVEL_MULT_CAP で上限を設けている。
 // ============================================================
 const UNIT_LEVEL_STAT_GAIN   = 0.15; // レベルごとの HP・攻撃力 上昇率（複利）。5回で約2倍
 const UNIT_LEVEL_COST_BASE   = 0.15; // 初回レベルアップ価格 = 購入価格 × これ
 const UNIT_LEVEL_COST_GROWTH = 1.15; // レベルが上がるごとに価格 × これ（複利）
+const UNIT_LEVEL_MULT_CAP    = 4;    // ステータス倍率の上限（約10回の強化で到達）
 
 function unitLevelCost(key, level) {
     return Math.max(2, Math.ceil(UNIT_DEFS[key].cost * UNIT_LEVEL_COST_BASE * Math.pow(UNIT_LEVEL_COST_GROWTH, level)));

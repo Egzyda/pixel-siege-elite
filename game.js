@@ -113,19 +113,20 @@ function toast(msg) {
 // 強化（アップグレード）の効果計算
 // ============================================================
 const upCount     = k => state.upgrades[k] || 0;
-const atkMult     = () => Math.pow(1.15, upCount('atk_boost'));
-const hpMult      = () => Math.pow(1.18, upCount('hp_boost'));
-const rateMult    = () => Math.pow(0.90, upCount('atk_speed'));
-const moveMult    = () => Math.pow(1.16, upCount('speed_boost'));
-const rangeMult   = () => Math.pow(1.14, upCount('range_ext'));
+const atkMult     = () => Math.min(ATK_MULT_CAP, Math.pow(1.15, upCount('atk_boost')));
+const hpMult      = () => Math.min(HP_MULT_CAP, Math.pow(1.18, upCount('hp_boost')));
+const rateMult    = () => Math.max(RATE_MULT_MIN, Math.pow(0.90, upCount('atk_speed')));
+const moveMult    = () => Math.min(MOVE_MULT_CAP, Math.pow(1.16, upCount('speed_boost')));
+const rangeMult   = () => Math.min(RANGE_MULT_CAP, Math.pow(1.14, upCount('range_ext')));
 const baseBonusHp = () => 250 * upCount('fortified');
 const baseRegen   = () => 5 * upCount('regen');
 const thornsRate  = () => Math.min(0.75, 0.20 * upCount('thorns'));
 const vampireRate = () => Math.min(0.5, 0.10 * upCount('vampire'));
 
 // ユニット個別レベル（キーごとの購入回数）
+// 複利のまま無制限だと1種に注ぎ込み続けた際に際限なく強くなるため上限を設ける
 const unitLevel     = k => (state.unitLevels && state.unitLevels[k]) || 0;
-const unitLevelMult = k => Math.pow(1 + UNIT_LEVEL_STAT_GAIN, unitLevel(k));
+const unitLevelMult = k => Math.min(UNIT_LEVEL_MULT_CAP, Math.pow(1 + UNIT_LEVEL_STAT_GAIN, unitLevel(k)));
 
 // AI 対戦モードで敵ユニットに掛かる強化倍率
 // （ラウンド進行によるスケーリング + AI が余剰予算を注ぎ込んだ分）
@@ -1590,9 +1591,9 @@ function buildUnitCard(key, opts) {
     const def = UNIT_DEFS[key];
     const splash = splashRadius(def);
 
-    // レベルアップ済みなら、表示するステータスにもその分を反映する
+    // レベルアップ済みなら、表示するステータスにもその分を反映する（上限あり）
     const lvl = o.enemy ? 0 : unitLevel(key);
-    const lvlMult = Math.pow(1 + UNIT_LEVEL_STAT_GAIN, lvl);
+    const lvlMult = Math.min(UNIT_LEVEL_MULT_CAP, Math.pow(1 + UNIT_LEVEL_STAT_GAIN, lvl));
     const dispHp = Math.round(def.hp * lvlMult);
     const dispDmg = Math.round(Math.abs(def.dmg) * lvlMult) * (def.dmg < 0 ? -1 : 1);
 
@@ -1636,20 +1637,30 @@ function buildUnitCard(key, opts) {
         </div>
         <div class="card-comment">${def.comment}</div>`;
 
-    card.appendChild(head);
-    card.appendChild(body);
+    // ユニット購入に関わる表示(アイコン・ステータス等)をまとめておく。
+    // 配置上限などで購入できない時にここだけを薄くし、下の強化欄まで
+    // 薄く見えて操作できないと誤解させないようにするため
+    const buyable = document.createElement('div');
+    buyable.className = 'card-buyable';
+    buyable.appendChild(head);
+    buyable.appendChild(body);
+    card.appendChild(buyable);
 
     // ショップのユニットタブでのみ、そのユニット種のレベルアップ購入を出す
     if(o.canLevelUp) {
         const lvup = document.createElement('div');
         lvup.className = 'card-lvup';
-        lvup.innerHTML = `
-            <button class="lvup-btn" type="button">▲ 強化する</button>
-            <span class="lvup-cost">${unitLevelCost(key, lvl)}G</span>`;
-        lvup.querySelector('.lvup-btn').addEventListener('click', e => {
-            e.stopPropagation();
-            buyUnitLevel(key);
-        });
+        if(lvlMult >= UNIT_LEVEL_MULT_CAP) {
+            lvup.innerHTML = `<span class="lvup-maxed">★ 最大まで強化済み</span>`;
+        } else {
+            lvup.innerHTML = `
+                <button class="lvup-btn" type="button">▲ 強化する</button>
+                <span class="lvup-cost">${unitLevelCost(key, lvl)}G</span>`;
+            lvup.querySelector('.lvup-btn').addEventListener('click', e => {
+                e.stopPropagation();
+                buyUnitLevel(key);
+            });
+        }
         card.appendChild(lvup);
     }
 
@@ -1658,6 +1669,7 @@ function buildUnitCard(key, opts) {
 
 // ユニット種別レベルアップの購入
 function buyUnitLevel(key) {
+    if(unitLevelMult(key) >= UNIT_LEVEL_MULT_CAP) { toast('これ以上は強化できません'); return; }
     const lvl = unitLevel(key);
     const cost = unitLevelCost(key, lvl);
     if(state.gold < cost) { toast('ゴールドが足りません'); return; }
@@ -1974,8 +1986,12 @@ function undoLastAction() {
 }
 
 function updateUndoButton() {
+    const disabled = state.undoStack.length === 0;
     const btn = document.getElementById('btn-undo');
-    if(btn) btn.disabled = state.undoStack.length === 0;
+    if(btn) btn.disabled = disabled;
+    // ショップシート側にも同じアンドゥボタンを置いているので合わせて更新する
+    const shopBtn = document.getElementById('btn-undo-shop');
+    if(shopBtn) shopBtn.disabled = disabled;
 }
 
 // ============================================================
@@ -2787,6 +2803,7 @@ function bindEvents() {
     document.getElementById('tab-upgrades').addEventListener('click', () => setTab('upgrades'));
     document.getElementById('tab-tactics').addEventListener('click', () => setTab('tactics'));
     document.getElementById('btn-undo').addEventListener('click', undoLastAction);
+    document.getElementById('btn-undo-shop').addEventListener('click', undoLastAction);
     document.getElementById('btn-start-battle').addEventListener('click', startBattle);
 
     // 背景をタップしてシートを閉じる

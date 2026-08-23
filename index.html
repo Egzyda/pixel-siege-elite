@@ -390,7 +390,11 @@ body {
     background: #172033;
     box-shadow: 0 0 0 1px rgba(245,158,11,0.35);
 }
-.shop-card.cant-buy { opacity: 0.42; }
+/* cant-buy はユニット本体が購入できないことを示す。強化(レベルアップ)は
+   それとは独立して有効な場合があるため、.card-lvup を持つカードでは
+   購入部分(.card-buyable)だけを薄くし、強化欄は薄くしない */
+.shop-card.cant-buy:not(:has(.card-lvup)) { opacity: 0.42; }
+.shop-card.cant-buy .card-buyable { opacity: 0.42; }
 .shop-card.owned-tactic { border-color: rgba(167,139,250,0.5); }
 
 .card-head { display: flex; align-items: center; gap: 6px; }
@@ -468,6 +472,14 @@ body {
 .lvup-btn:active { transform: scale(0.97); }
 .lvup-btn:disabled { opacity: 0.4; cursor: default; }
 .lvup-cost { font-size: 10px; font-weight: 800; color: var(--gold); min-width: 34px; text-align: right; }
+.lvup-maxed {
+    flex: 1;
+    text-align: center;
+    font-size: 10px;
+    font-weight: 800;
+    color: var(--gold);
+    padding: 5px 0;
+}
 .card-note { font-size: 9px; color: var(--purple); line-height: 1.35; margin-top: 2px; }
 
 .sheet-foot { display: flex; gap: 6px; padding-top: 8px; flex: 0 0 auto; }
@@ -884,6 +896,7 @@ body {
             </div>
             <div id="shop-list"></div>
             <div class="sheet-foot">
+                <button class="icon-btn" id="btn-undo-shop" title="ひとつ戻す">↺</button>
                 <button class="btn primary" id="btn-sheet-done">配置にもどる</button>
             </div>
         </div>
