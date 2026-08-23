@@ -129,6 +129,15 @@ const vampireRate = () => Math.min(0.5, 0.10 * upCount('vampire'));
 const unitLevel     = k => (state.unitLevels && state.unitLevels[k]) || 0;
 const unitLevelMult = k => Math.min(UNIT_LEVEL_MULT_CAP, Math.pow(1 + UNIT_LEVEL_STAT_GAIN, unitLevel(k)));
 
+// プレイヤーが現在編成に持っているそのユニット種の数
+const unitOwnedCount = key => state.roster.filter(r => r.key === key).length;
+
+// 実際の購入価格。ユニット個別レベルで強化済みの種類は新規購入も
+// その分だけ割高になる（そうしないと「1体だけ安く強化してから量産する」
+// ことでレベルアップの価格設計を踏み倒せてしまうため。強化コストが
+// 所持数に比例するのと合わせて、後から買い足しても損得が生じないようにしてある）
+const unitBuyCost = key => Math.round(UNIT_DEFS[key].cost * unitLevelMult(key));
+
 // AI 対戦モードで敵ユニットに掛かる強化倍率
 // （ラウンド進行によるスケーリング + AI が余剰予算を注ぎ込んだ分）
 function enemyPowerMult() {
@@ -1657,7 +1666,7 @@ function buildUnitCard(key, opts) {
     if(o.showCost) {
         const cost = document.createElement('div');
         cost.className = 'card-cost';
-        cost.textContent = def.cost + 'G';
+        cost.textContent = unitBuyCost(key) + 'G';
         head.appendChild(cost);
     }
 
@@ -1691,7 +1700,7 @@ function buildUnitCard(key, opts) {
         } else {
             lvup.innerHTML = `
                 <button class="lvup-btn" type="button">▲ 強化する</button>
-                <span class="lvup-cost">${unitLevelCost(key, lvl)}G</span>`;
+                <span class="lvup-cost">${unitLevelCost(key, lvl, o.owned)}G</span>`;
             lvup.querySelector('.lvup-btn').addEventListener('click', e => {
                 e.stopPropagation();
                 buyUnitLevel(key);
@@ -1707,7 +1716,7 @@ function buildUnitCard(key, opts) {
 function buyUnitLevel(key) {
     if(unitLevelMult(key) >= UNIT_LEVEL_MULT_CAP) { toast('これ以上は強化できません'); return; }
     const lvl = unitLevel(key);
-    const cost = unitLevelCost(key, lvl);
+    const cost = unitLevelCost(key, lvl, unitOwnedCount(key));
     if(state.gold < cost) { toast('ゴールドが足りません'); return; }
     pushUndo();
     state.gold -= cost;
@@ -1812,11 +1821,10 @@ function showUnitInfo(key, isP, sx, sy, sellEntry) {
     box.appendChild(buildUnitCard(key, { showCost: false, enemy: !isP }));
 
     if(sellEntry) {
-        const def = UNIT_DEFS[key];
         const sell = document.createElement('button');
         sell.className = 'info-sell-btn';
         sell.type = 'button';
-        sell.textContent = `売却する（+${def.cost}G）`;
+        sell.textContent = `売却する（+${unitBuyCost(key)}G）`;
         sell.addEventListener('click', () => {
             sellRosterEntry(sellEntry);
             hideUnitInfo();
@@ -1908,14 +1916,13 @@ function closeShop() {
 }
 
 function selectShopUnit(key) {
-    const def = UNIT_DEFS[key];
     const cap = maxUnitsFor(state.mode);
     if(state.roster.length >= cap) { toast(`配置できるのは ${cap} 体までです`); return; }
-    if(state.gold < def.cost) { toast('ゴールドが足りません'); return; }
+    if(state.gold < unitBuyCost(key)) { toast('ゴールドが足りません'); return; }
     state.selected = (state.selected === key) ? null : key;
     if(state.selected) {
         closeShop();
-        toast(`${def.name} を選択中 — 緑のエリアをタップして配置`);
+        toast(`${UNIT_DEFS[key].name} を選択中 — 緑のエリアをタップして配置`);
     }
     updatePrepUI();
 }
@@ -1963,10 +1970,10 @@ function updatePrepUI() {
         const key = card.dataset.key;
         if(key) {
             card.classList.toggle('selected', state.selected === key);
-            card.classList.toggle('cant-buy', state.gold < UNIT_DEFS[key].cost || state.roster.length >= cap);
+            card.classList.toggle('cant-buy', state.gold < unitBuyCost(key) || state.roster.length >= cap);
             // レベルアップの可否はユニット本体の購入可否とは独立して判定する
             const lvupBtn = card.querySelector('.lvup-btn');
-            if(lvupBtn) lvupBtn.disabled = state.gold < unitLevelCost(key, unitLevel(key));
+            if(lvupBtn) lvupBtn.disabled = state.gold < unitLevelCost(key, unitLevel(key), unitOwnedCount(key));
         } else if(card.dataset.upgrade) {
             card.classList.toggle('cant-buy', state.gold < upgradePrice(card.dataset.upgrade));
         } else if(card.dataset.tactic) {
@@ -2080,17 +2087,17 @@ function onPointerDown(e) {
 
     // ユニット選択中 → 配置
     if(state.selected) {
-        const def = UNIT_DEFS[state.selected];
+        const cost = unitBuyCost(state.selected);
         if(p.y < lay.deployTop || p.y > lay.deployBottom) {
             toast('緑色の配置エリア内をタップしてください');
             return;
         }
-        if(state.gold < def.cost) { toast('ゴールドが足りません'); state.selected = null; updatePrepUI(); return; }
+        if(state.gold < cost) { toast('ゴールドが足りません'); state.selected = null; updatePrepUI(); return; }
         const cap = maxUnitsFor(state.mode);
         if(state.roster.length >= cap) { toast(`配置できるのは ${cap} 体までです`); return; }
 
         pushUndo();
-        state.gold -= def.cost;
+        state.gold -= cost;
         state.roster.push({
             id: state.nextId++,
             key: state.selected,
@@ -2098,7 +2105,7 @@ function onPointerDown(e) {
             y: clamp(p.y, lay.deployTop, lay.deployBottom),
             boughtRound: state.round // このラウンド購入分だけ売却可能にするための記録
         });
-        if(state.gold < def.cost) state.selected = null; // もう買えないなら選択解除
+        if(state.gold < cost) state.selected = null; // もう買えないなら選択解除
         renderShop();
         saveGame();
         return;
@@ -2127,9 +2134,10 @@ function onPointerMove(e) {
 function sellRosterEntry(entry) {
     pushUndo();
     const def = UNIT_DEFS[entry.key];
+    const refund = unitBuyCost(entry.key);
     state.roster = state.roster.filter(r => r !== entry);
-    state.gold += def.cost;
-    toast(`${def.name} を売却 (+${def.cost}G)`);
+    state.gold += refund;
+    toast(`${def.name} を売却 (+${refund}G)`);
     renderShop();
     saveGame();
 }
