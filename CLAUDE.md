@@ -27,8 +27,23 @@ git push origin main
 
 push することで Cloudflare Pages が自動デプロイされ、実機（スマホ）で即時確認できます。
 
-> 作業ブランチが指定されている場合は、そのブランチへ push し、
-> main にマージした時点で Cloudflare Pages の自動デプロイが走ります。
+### 作業ブランチを使った場合は必ず main にマージする
+
+作業ブランチ（`claude/xxx` など）で開発した場合、**作業完了のたびに必ず main にマージし、
+main を origin へ push してください**。ユーザーから明示的な指示がなくても、これは常に実行する
+デフォルト動作です。
+
+```bash
+git checkout main
+git pull origin main
+git merge --no-ff <作業ブランチ名> -m "Merge branch '<作業ブランチ名>' into main"
+git push origin main
+```
+
+- 作業ブランチへの push だけでは Cloudflare Pages はデプロイされません。
+  **main にマージして初めて自動デプロイが走ります。**
+- コンフリクトが発生した場合は解決してからマージを完了させてください。
+- マージ後、作業ブランチは削除せず残しておいて構いません（履歴として保持）。
 
 ### コメントは日本語で記述
 
