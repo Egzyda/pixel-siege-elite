@@ -82,6 +82,10 @@ const unitScale = key => UNIT_DEFS[key].scale || (key === 'giant' ? 3 : 2);
 const KNOCKBACK_MULT = 0.3;
 const KNOCKBACK_CAP = 4;
 
+// 攻撃対象のロックオン距離。この範囲内に相手がいる限り、より近い別の敵が
+// 現れても目移りせず狙い続ける（タンクやノックバックで足止めする意味を保つため）
+const TARGET_LOCK_RANGE = 210;
+
 // ダメージ表示などのポップアップ
 function spawnPop(x, y, text, color) {
     state.popups.push({ x, y, text, color, life: 1.0, rise: 0 });
@@ -109,15 +113,15 @@ function toast(msg) {
 // 強化（アップグレード）の効果計算
 // ============================================================
 const upCount     = k => state.upgrades[k] || 0;
-const atkMult     = () => Math.pow(1.08, upCount('atk_boost'));
-const hpMult      = () => Math.pow(1.10, upCount('hp_boost'));
-const rateMult    = () => Math.pow(0.94, upCount('atk_speed'));
-const moveMult    = () => Math.pow(1.10, upCount('speed_boost'));
-const rangeMult   = () => Math.pow(1.08, upCount('range_ext'));
+const atkMult     = () => Math.pow(1.15, upCount('atk_boost'));
+const hpMult      = () => Math.pow(1.18, upCount('hp_boost'));
+const rateMult    = () => Math.pow(0.90, upCount('atk_speed'));
+const moveMult    = () => Math.pow(1.16, upCount('speed_boost'));
+const rangeMult   = () => Math.pow(1.14, upCount('range_ext'));
 const baseBonusHp = () => 250 * upCount('fortified');
 const baseRegen   = () => 5 * upCount('regen');
-const thornsRate  = () => Math.min(0.75, 0.15 * upCount('thorns'));
-const vampireRate = () => Math.min(0.5, 0.06 * upCount('vampire'));
+const thornsRate  = () => Math.min(0.75, 0.20 * upCount('thorns'));
+const vampireRate = () => Math.min(0.5, 0.10 * upCount('vampire'));
 
 // ユニット個別レベル（キーごとの購入回数）
 const unitLevel     = k => (state.unitLevels && state.unitLevels[k]) || 0;
@@ -288,6 +292,7 @@ class Unit {
         this.lifetime = o.lifetime || 0;    // 0 なら寿命なし
         this.pal = isP ? this.def.pal : (ENEMY_PALETTES[key] || this.def.pal);
         this.radius = 7;
+        this.target = null;                 // ロックオン中の攻撃対象
     }
 
     // 攻撃対象を探す
@@ -326,7 +331,7 @@ class Unit {
 
         // 近くに敵がいなければ敵拠点を目標にする
         const foeBase = this.isP ? state.enemyBase : state.playerBase;
-        if((!best || bd > 210) && foeBase && foeBase.hp > 0) return foeBase;
+        if((!best || bd > TARGET_LOCK_RANGE) && foeBase && foeBase.hp > 0) return foeBase;
         return best;
     }
 
@@ -345,7 +350,19 @@ class Unit {
         let spd = this.speed;
         if(!this.isP && state.timeWarp > 0) spd *= 0.5;
 
-        const target = this.findTarget();
+        // 攻撃対象の解決。回復役は毎フレーム最も負傷した味方を選び直すが、
+        // それ以外は一度ロックした敵ユニット/ボスを、死ぬか大きく引き離される
+        // (TARGET_LOCK_RANGE 超）まで狙い続ける。毎フレーム最寄り優先で選び
+        // 直すと、狙っていたタンクより後から近くに現れた雑魚に目移りして
+        // しまい、タンクやノックバックによる足止めが機能しなくなるため。
+        // 拠点への攻め込み（敵不在時の暫定目標）は敵の出現に反応できるよう
+        // ロック対象に含めない。
+        const locked = this.target && this.target.hp > 0 && !this.target.isBase &&
+                       dist(this.target, this) <= TARGET_LOCK_RANGE;
+        if(this.def.type === 'healer' || !locked) {
+            this.target = this.findTarget();
+        }
+        const target = this.target;
 
         if(target) {
             const d = dist(target, this);
