@@ -326,23 +326,25 @@ const TACTIC_DEFS = {
 // budgetMult       … AI に配られる予算の倍率
 // powerStep        … ラウンドごとに AI ユニットが強くなる割合（プレイヤーの「強化」に相当）
 // counterStrength  … プレイヤー編成を見て対策する度合い（0 = 対策しない）
+// levelInvestRatio … VERSUS限定。毎ラウンドの予算のうち、主力ユニットの
+//                    個別レベルアップに回す割合（0 = レベルアップしない）
 // pool             … 購入候補と抽選ウェイト
 const AI_PRESETS = {
     easy: {
         label:'EASY', desc:'安くて数の多い編成',
-        budgetMult:1.5, powerStep:0.02, counterStrength:0,
+        budgetMult:1.5, powerStep:0.02, counterStrength:0, levelInvestRatio:0,
         pool:[{key:'goblin', w:6}, {key:'orc', w:2}, {key:'skeleton', w:2}, {key:'imp', w:1}]
     },
     normal: {
         label:'NORMAL', desc:'バランス型。こちらの編成も見てくる',
-        budgetMult:0.92, powerStep:0.02, counterStrength:0.3,
+        budgetMult:0.92, powerStep:0.02, counterStrength:0.3, levelInvestRatio:0.2,
         pool:[{key:'knight', w:3}, {key:'archer', w:3}, {key:'orc', w:2},
               {key:'skeleton', w:2}, {key:'goblin', w:2}, {key:'wizard', w:1},
               {key:'warlord', w:1}, {key:'lich', w:1}, {key:'imp', w:1}]
     },
     hard: {
         label:'HARD', desc:'高コスト特化。徹底的に対策してくる',
-        budgetMult:1.05, powerStep:0.04, counterStrength:0.65,
+        budgetMult:1.05, powerStep:0.04, counterStrength:0.65, levelInvestRatio:0.35,
         pool:[{key:'wizard', w:3}, {key:'giant', w:2}, {key:'knight', w:2},
               {key:'archer', w:2}, {key:'healer', w:1}, {key:'orc', w:1},
               {key:'warlord', w:2}, {key:'lich', w:2}, {key:'drake', w:2}, {key:'imp', w:1}]

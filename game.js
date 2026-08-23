@@ -26,6 +26,7 @@ const state = {
     aiGold: 0,                // AI の残予算（繰り越し用）
     aiPower: 1,               // AI が余剰予算で得た編成強化倍率
     aiPersonality: null,      // AI の「好み」（試合開始時に抽選、試合中は固定）
+    aiUnitLevels: {},         // AI が投資したユニット個別レベル {key: レベル}（VERSUS限定）
     nextId: 1,
 
     units: [],                // バトル中のユニット実体
@@ -128,6 +129,13 @@ const vampireRate = () => Math.min(0.5, 0.10 * upCount('vampire'));
 // 複利のまま無制限だと1種に注ぎ込み続けた際に際限なく強くなるため上限を設ける
 const unitLevel     = k => (state.unitLevels && state.unitLevels[k]) || 0;
 const unitLevelMult = k => Math.min(UNIT_LEVEL_MULT_CAP, Math.pow(1 + UNIT_LEVEL_STAT_GAIN, unitLevel(k)));
+
+// AI（VERSUS限定）が投資したユニット個別レベル。計算式はプレイヤーと共通
+const aiUnitLevel     = k => (state.aiUnitLevels && state.aiUnitLevels[k]) || 0;
+const aiUnitLevelMult = k => Math.min(UNIT_LEVEL_MULT_CAP, Math.pow(1 + UNIT_LEVEL_STAT_GAIN, aiUnitLevel(k)));
+// AIの実際の購入価格。プレイヤー側のunitBuyCost()と同じ考え方で、
+// レベルアップ済みの種類は新規購入も割高になる
+const aiUnitBuyCost = key => Math.round(UNIT_DEFS[key].cost * aiUnitLevelMult(key));
 
 // プレイヤーが現在編成に持っているそのユニット種の数
 const unitOwnedCount = key => state.roster.filter(r => r.key === key).length;
@@ -279,9 +287,11 @@ class Unit {
         this.y = y;
         this.rid = o.rid || 0;              // 編成データとの対応 ID
 
-        // プレイヤー側のみ強化・ユニット個別レベルの効果を受ける
+        // プレイヤー側は強化・ユニット個別レベルの効果を受ける。
+        // 敵側もVERSUSではAIが投資したユニット個別レベルの効果を受ける
+        // （SURVIVAL/STORYではaiUnitLevelsが空のまま=常に等倍）
         const ep = isP ? 1 : enemyPowerMult();
-        const lm = isP ? unitLevelMult(key) : 1;
+        const lm = isP ? unitLevelMult(key) : aiUnitLevelMult(key);
         const am = (isP ? atkMult() : ep) * lm;
         const hm = (isP ? hpMult() : ep) * lm;
         const rm = isP ? rateMult() : 1;
@@ -916,6 +926,18 @@ function counteredPool(preset, roster) {
     return base.map(p => ({ key: p.key, w: p.w * (boosts[p.key] || 1) }));
 }
 
+// AIがレベルアップ投資の対象にするユニット種を選ぶ。現在の編成の中で
+// 最も数の多い種類を「主力」とみなす（同数なら「好み」のウェイトで優先）
+function pickAiLevelTarget() {
+    const counts = {};
+    state.aiRoster.forEach(r => { counts[r.key] = (counts[r.key] || 0) + 1; });
+    const keys = Object.keys(counts);
+    if(keys.length === 0) return null;
+    const bias = (state.aiPersonality && state.aiPersonality.bias) || {};
+    keys.sort((a, b) => (counts[b] * (bias[b] || 1)) - (counts[a] * (bias[a] || 1)));
+    return keys[0];
+}
+
 // AI の編成を組む（難易度プリセット + プレイヤー編成への対策）
 function buildAiRoster() {
     // SURVIVAL は「メカベラム方式」: 前ラウンドの編成を引き継がず、その時点で
@@ -930,7 +952,26 @@ function buildAiRoster() {
     const preset = AI_PRESETS[state.difficulty];
     // 序盤にいきなり差がつかないよう、予算補正は数ラウンドかけて効いてくる
     const ramp = 1 + (preset.budgetMult - 1) * Math.min(1, state.round / 3);
-    state.aiGold += Math.round(budgetForRound(state.round) * ramp);
+    const roundIncome = Math.round(budgetForRound(state.round) * ramp);
+    state.aiGold += roundIncome;
+
+    // VERSUS限定: プレイヤーと同じユニット個別レベルアップの仕組みをAIにも
+    // 使わせる。対象は現在の編成で最も多い（＝主力の）種類とし、毎ラウンドの
+    // 収入の一部を注ぎ込む。1ラウンド目はまだ編成が無いため対象なし
+    if(state.mode === 'versus' && preset.levelInvestRatio > 0) {
+        let levelBudget = Math.round(roundIncome * preset.levelInvestRatio);
+        const target = pickAiLevelTarget();
+        if(target) {
+            while(levelBudget > 0 && state.aiGold > 0 && aiUnitLevelMult(target) < UNIT_LEVEL_MULT_CAP) {
+                const n = state.aiRoster.filter(r => r.key === target).length;
+                const cost = unitLevelCost(target, aiUnitLevel(target), n);
+                if(cost > levelBudget || cost > state.aiGold) break;
+                state.aiGold -= cost;
+                levelBudget -= cost;
+                state.aiUnitLevels[target] = aiUnitLevel(target) + 1;
+            }
+        }
+    }
 
     // 2 ラウンド目以降は直前のプレイヤー編成を見て刺さるユニットを選ぶ
     const pool = counteredPool(preset, state.round > 1 ? state.roster : []);
@@ -940,7 +981,7 @@ function buildAiRoster() {
     const cap = maxUnitsFor(state.mode);
     let guard = 400;
     while(guard-- > 0 && state.aiRoster.length < cap) {
-        const affordable = pool.filter(p => UNIT_DEFS[p.key].cost <= state.aiGold);
+        const affordable = pool.filter(p => aiUnitBuyCost(p.key) <= state.aiGold);
         if(affordable.length === 0) break;
 
         // ウェイト付き抽選
@@ -949,7 +990,7 @@ function buildAiRoster() {
         let pick = affordable[affordable.length - 1];
         for(const p of affordable) { r -= p.w; if(r <= 0) { pick = p; break; } }
 
-        state.aiGold -= UNIT_DEFS[pick.key].cost;
+        state.aiGold -= aiUnitBuyCost(pick.key);
 
         // 近接・タンクは前列、遠距離・回復は後列に配置する
         const t = UNIT_DEFS[pick.key].type;
@@ -1044,7 +1085,8 @@ function enterPrep() {
     state.snapshot = JSON.stringify({
         round: state.round, gold: state.gold,
         roster: state.roster, aiRoster: state.aiRoster, aiGold: state.aiGold,
-        aiPower: state.aiPower, playerLife: state.playerLife, aiLife: state.aiLife,
+        aiPower: state.aiPower, aiUnitLevels: state.aiUnitLevels,
+        playerLife: state.playerLife, aiLife: state.aiLife,
         upgrades: state.upgrades, unitLevels: state.unitLevels, tactics: state.tactics, nextId: state.nextId
     });
 
@@ -1434,6 +1476,7 @@ function retryRound() {
     state.aiRoster = s.aiRoster;
     state.aiGold = s.aiGold;
     state.aiPower = s.aiPower || 1;
+    state.aiUnitLevels = s.aiUnitLevels || {};
     state.playerLife = s.playerLife;
     state.aiLife = s.aiLife;
     state.upgrades = s.upgrades;
@@ -1478,6 +1521,7 @@ function startNewGame(mode) {
     state.aiRoster = [];
     state.aiGold = 0;
     state.aiPower = 1;
+    state.aiUnitLevels = {};
     state.aiNote = '';
     // AI の「好み」を試合開始時に1つ抽選する（試合中は固定。STORYは対象外）
     state.aiPersonality = (mode === 'story') ? null
@@ -1531,7 +1575,8 @@ function saveGame() {
             mode: state.mode, difficulty: state.difficulty,
             round: state.round, gold: state.gold,
             roster: state.roster, aiRoster: state.aiRoster, aiGold: state.aiGold,
-            aiPower: state.aiPower, playerLife: state.playerLife, aiLife: state.aiLife,
+            aiPower: state.aiPower, aiUnitLevels: state.aiUnitLevels,
+            playerLife: state.playerLife, aiLife: state.aiLife,
             aiPersonalityName: state.aiPersonality ? state.aiPersonality.name : null,
             upgrades: state.upgrades, unitLevels: state.unitLevels, tactics: state.tactics, nextId: state.nextId
         }));
@@ -1559,6 +1604,7 @@ function loadGame() {
         state.aiRoster = s.aiRoster || [];
         state.aiGold = s.aiGold || 0;
         state.aiPower = s.aiPower || 1;
+        state.aiUnitLevels = s.aiUnitLevels || {};
         state.playerLife = s.playerLife === undefined ? VERSUS_LIFE : s.playerLife;
         state.aiLife = s.aiLife === undefined ? VERSUS_LIFE : s.aiLife;
         state.aiPersonality = AI_PERSONALITIES.find(p => p.name === s.aiPersonalityName) || null;
@@ -1584,6 +1630,8 @@ function loadGame() {
         state.snapshot = JSON.stringify({
             round: state.round, gold: state.gold,
             roster: state.roster, aiRoster: state.aiRoster, aiGold: state.aiGold,
+            aiPower: state.aiPower, aiUnitLevels: state.aiUnitLevels,
+            playerLife: state.playerLife, aiLife: state.aiLife,
             upgrades: state.upgrades, unitLevels: state.unitLevels, tactics: state.tactics, nextId: state.nextId
         });
 
@@ -1636,8 +1684,9 @@ function buildUnitCard(key, opts) {
     const def = UNIT_DEFS[key];
     const splash = splashRadius(def);
 
-    // レベルアップ済みなら、表示するステータスにもその分を反映する（上限あり）
-    const lvl = o.enemy ? 0 : unitLevel(key);
+    // レベルアップ済みなら、表示するステータスにもその分を反映する（上限あり）。
+    // 敵側はVERSUSでAIが投資した分を反映する（それ以外のモードは常に0）
+    const lvl = o.enemy ? aiUnitLevel(key) : unitLevel(key);
     const lvlMult = Math.min(UNIT_LEVEL_MULT_CAP, Math.pow(1 + UNIT_LEVEL_STAT_GAIN, lvl));
     const dispHp = Math.round(def.hp * lvlMult);
     const dispDmg = Math.round(Math.abs(def.dmg) * lvlMult) * (def.dmg < 0 ? -1 : 1);
@@ -2842,6 +2891,7 @@ function bindEvents() {
     document.getElementById('btn-mode-survival').addEventListener('click', () => startNewGame('survival'));
     document.getElementById('btn-mode-versus').addEventListener('click', () => startNewGame('versus'));
     document.getElementById('btn-mode-back').addEventListener('click', backToTitle);
+    document.getElementById('btn-home').addEventListener('click', backToTitle);
     document.querySelectorAll('.diff-btn').forEach(b => {
         b.addEventListener('click', () => {
             state.difficulty = b.dataset.diff;
