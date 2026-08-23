@@ -1595,7 +1595,7 @@ function buildUnitCard(key, opts) {
             <span class="card-type">${reachLabel(def)}</span>
             ${splash ? '<span class="card-type splash">範囲</span>' : ''}
             ${role ? `<span class="card-type">${role}</span>` : ''}
-            ${lvl > 0 ? `<span class="card-lv">Lv.${lvl}</span>` : ''}
+            ${o.enemy ? '' : `<span class="card-lv">Lv.${lvl + 1}</span>`}
             ${o.owned ? `<span class="card-own">×${o.owned}</span>` : ''}
         </div>`;
     head.appendChild(id);
@@ -1646,8 +1646,11 @@ function buyUnitLevel(key) {
     if(state.gold < cost) { toast('ゴールドが足りません'); return; }
     pushUndo();
     state.gold -= cost;
-    state.unitLevels[key] = lvl + 1;
-    toast(`${UNIT_DEFS[key].name} が Lv.${lvl + 1} に強化された`);
+    const newLvl = lvl + 1;
+    state.unitLevels[key] = newLvl;
+    // カード表示は内部レベル(0始まり)+1を「Lv.1」始まりとして見せているため、
+    // トーストも同じ表記(newLvl+1)に合わせる
+    toast(`${UNIT_DEFS[key].name} が Lv.${newLvl + 1} に強化された`);
     renderShop();
     saveGame();
 }

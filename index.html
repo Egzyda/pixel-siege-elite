@@ -405,7 +405,10 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.card-sub { display: flex; align-items: center; gap: 4px; margin-top: 1px; }
+/* バッジ(近接/遠距離・範囲・Lv等)が入りきらない場合はバッジ単位で折り返す。
+   単語の途中で改行されて崩れるのを防ぐため、各バッジは white-space: nowrap で
+   1行を維持したまま複数行に流す */
+.card-sub { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 4px; row-gap: 3px; margin-top: 1px; }
 .card-type {
     font-size: 8.5px;
     font-weight: 700;
@@ -413,10 +416,12 @@ body {
     background: var(--muted);
     border-radius: 4px;
     padding: 0 4px;
+    white-space: nowrap;
+    flex: 0 0 auto;
 }
 /* 範囲攻撃を持つユニットは一目で分かるよう色を変える */
 .card-type.splash { background: var(--accent); }
-.card-own { font-size: 9px; font-weight: 800; color: var(--green); }
+.card-own { font-size: 9px; font-weight: 800; color: var(--green); white-space: nowrap; flex: 0 0 auto; }
 .card-cost { font-size: 13px; font-weight: 900; color: var(--gold); white-space: nowrap; }
 .card-stats {
     display: grid;
@@ -436,6 +441,8 @@ body {
     background: rgba(167,139,250,0.15);
     border-radius: 4px;
     padding: 0 4px;
+    white-space: nowrap;
+    flex: 0 0 auto;
 }
 .card-lvup {
     display: flex;
