@@ -251,19 +251,35 @@ const BOSS_DEFS = {
 // 強化（ショップの「強化」タブ）
 // 恒久効果。購入するたびに価格が上がり、効果は累積する。
 // ============================================================
-const UPGRADE_PRICE_SCALE = 1.6;
+// 価格の伸びを緩やかにして、余ったゴールドを気軽に少しずつ注ぎ込めるようにする
+// （以前は 1.6 倍/回でほぼ「倍プッシュ」に感じられたため大幅に緩和した）
+const UPGRADE_PRICE_SCALE = 1.18;
 
 const UPGRADE_DEFS = {
-    atk_boost:   { name:'攻撃強化', icon:'⚔️', cost:70, desc:'全ユニットの攻撃力 +15%' },
-    hp_boost:    { name:'装甲強化', icon:'❤️', cost:70, desc:'全ユニットのHP +20%' },
-    atk_speed:   { name:'速射訓練', icon:'⚡', cost:80, desc:'攻撃間隔 -12%（攻撃が速くなる）' },
-    speed_boost: { name:'進軍訓練', icon:'💨', cost:60, desc:'全ユニットの移動速度 +20%' },
-    range_ext:   { name:'射程延長', icon:'🎯', cost:65, desc:'遠距離・範囲ユニットの射程 +15%' },
-    fortified:   { name:'城壁補強', icon:'🏰', cost:80, desc:'自拠点の最大HP +400' },
-    regen:       { name:'自動修復', icon:'🔧', cost:70, desc:'自拠点のHPが毎秒8回復' },
-    thorns:      { name:'反射装甲', icon:'🛡️', cost:75, desc:'味方が受けたダメージの25%を反射' },
-    vampire:     { name:'吸血の紋章', icon:'🧛', cost:75, desc:'与えたダメージの10%を自己回復' }
+    atk_boost:   { name:'攻撃強化', icon:'⚔️', cost:40, desc:'全ユニットの攻撃力 +8%' },
+    hp_boost:    { name:'装甲強化', icon:'❤️', cost:40, desc:'全ユニットのHP +10%' },
+    atk_speed:   { name:'速射訓練', icon:'⚡', cost:45, desc:'攻撃間隔 -6%（攻撃が速くなる）' },
+    speed_boost: { name:'進軍訓練', icon:'💨', cost:35, desc:'全ユニットの移動速度 +10%' },
+    range_ext:   { name:'射程延長', icon:'🎯', cost:40, desc:'遠距離・範囲ユニットの射程 +8%' },
+    fortified:   { name:'城壁補強', icon:'🏰', cost:45, desc:'自拠点の最大HP +250' },
+    regen:       { name:'自動修復', icon:'🔧', cost:40, desc:'自拠点のHPが毎秒5回復' },
+    thorns:      { name:'反射装甲', icon:'🛡️', cost:40, desc:'味方が受けたダメージの15%を反射（上限75%）' },
+    vampire:     { name:'吸血の紋章', icon:'🧛', cost:40, desc:'与えたダメージの6%を自己回復（上限50%）' }
 };
+
+// ============================================================
+// ユニット個別レベルアップ（ショップのユニットカードから購入）
+// 特定のユニット種を強化すると、そのユニット全員（既に配置済み/今後購入分の
+// 両方）が恩恵を受ける。1回ごとの上昇は小さく、価格も緩やかにしか増えない
+// ため、余ったゴールドを気兼ねなく注ぎ込める。
+// ============================================================
+const UNIT_LEVEL_STAT_GAIN = 0.05;   // レベルごとの HP・攻撃力 上昇率（複利）
+const UNIT_LEVEL_COST_BASE = 0.5;    // 初回レベルアップ価格 = 購入価格 × これ
+const UNIT_LEVEL_COST_STEP = 0.3;    // レベルが上がるごとに購入価格 × これ ずつ加算
+
+function unitLevelCost(key, level) {
+    return Math.max(4, Math.ceil(UNIT_DEFS[key].cost * (UNIT_LEVEL_COST_BASE + level * UNIT_LEVEL_COST_STEP)));
+}
 
 // ============================================================
 // 戦術（ショップの「戦術」タブ）

@@ -34,6 +34,7 @@ const state = {
     enemyBase: null,
 
     upgrades: {},             // 購入済みの強化 {key: 個数}
+    unitLevels: {},           // ユニット種別ごとのレベル {key: レベル}
     tactics: {},              // 購入済みの戦術 {key: true}
     tacticTimers: {},         // 戦術のクールダウン残り（フレーム）
 
@@ -77,6 +78,10 @@ const randRange = (min, max) => min + Math.random() * (max - min);
 // ユニットの描画スケール（UNIT_DEFS 側で個別指定がなければ既定値を使う）
 const unitScale = key => UNIT_DEFS[key].scale || (key === 'giant' ? 3 : 2);
 
+// ノックバックは「軽く後ずさる」程度に留める（壁役が吹き飛ばないように）
+const KNOCKBACK_MULT = 0.3;
+const KNOCKBACK_CAP = 4;
+
 // ダメージ表示などのポップアップ
 function spawnPop(x, y, text, color) {
     state.popups.push({ x, y, text, color, life: 1.0, rise: 0 });
@@ -104,15 +109,19 @@ function toast(msg) {
 // 強化（アップグレード）の効果計算
 // ============================================================
 const upCount     = k => state.upgrades[k] || 0;
-const atkMult     = () => Math.pow(1.15, upCount('atk_boost'));
-const hpMult      = () => Math.pow(1.20, upCount('hp_boost'));
-const rateMult    = () => Math.pow(0.88, upCount('atk_speed'));
-const moveMult    = () => Math.pow(1.20, upCount('speed_boost'));
-const rangeMult   = () => Math.pow(1.15, upCount('range_ext'));
-const baseBonusHp = () => 400 * upCount('fortified');
-const baseRegen   = () => 8 * upCount('regen');
-const thornsRate  = () => Math.min(0.75, 0.25 * upCount('thorns'));
-const vampireRate = () => Math.min(0.5, 0.10 * upCount('vampire'));
+const atkMult     = () => Math.pow(1.08, upCount('atk_boost'));
+const hpMult      = () => Math.pow(1.10, upCount('hp_boost'));
+const rateMult    = () => Math.pow(0.94, upCount('atk_speed'));
+const moveMult    = () => Math.pow(1.10, upCount('speed_boost'));
+const rangeMult   = () => Math.pow(1.08, upCount('range_ext'));
+const baseBonusHp = () => 250 * upCount('fortified');
+const baseRegen   = () => 5 * upCount('regen');
+const thornsRate  = () => Math.min(0.75, 0.15 * upCount('thorns'));
+const vampireRate = () => Math.min(0.5, 0.06 * upCount('vampire'));
+
+// ユニット個別レベル（キーごとの購入回数）
+const unitLevel     = k => (state.unitLevels && state.unitLevels[k]) || 0;
+const unitLevelMult = k => Math.pow(1 + UNIT_LEVEL_STAT_GAIN, unitLevel(k));
 
 // AI 対戦モードで敵ユニットに掛かる強化倍率
 // （ラウンド進行によるスケーリング + AI が余剰予算を注ぎ込んだ分）
@@ -255,10 +264,11 @@ class Unit {
         this.y = y;
         this.rid = o.rid || 0;              // 編成データとの対応 ID
 
-        // プレイヤー側のみ強化の効果を受ける
+        // プレイヤー側のみ強化・ユニット個別レベルの効果を受ける
         const ep = isP ? 1 : enemyPowerMult();
-        const am = isP ? atkMult() : ep;
-        const hm = isP ? hpMult() : ep;
+        const lm = isP ? unitLevelMult(key) : 1;
+        const am = (isP ? atkMult() : ep) * lm;
+        const hm = (isP ? hpMult() : ep) * lm;
         const rm = isP ? rateMult() : 1;
         const sm = isP ? moveMult() : 1;
         const gm = isP ? rangeMult() : 1;
@@ -396,10 +406,11 @@ class Unit {
             });
         } else {
             t.takeDmg(this.dmg, this);
-            // ノックバック
+            // ノックバック（「壁の外まで吹き飛ぶ」ことがないよう、
+            // 一撃あたりの勢いに上限を設けて「軽く後ずさる」程度に抑える）
             if(t.vx !== undefined) {
                 const a = Math.atan2(t.y - this.y, t.x - this.x);
-                const k = (this.def.kb / (t.def && t.def.mass ? t.def.mass : 2)) * 2;
+                const k = Math.min(KNOCKBACK_CAP, (this.def.kb / (t.def && t.def.mass ? t.def.mass : 2)) * KNOCKBACK_MULT);
                 t.vx += Math.cos(a) * k;
                 t.vy += Math.sin(a) * k;
             }
@@ -982,7 +993,7 @@ function enterPrep() {
         round: state.round, gold: state.gold,
         roster: state.roster, aiRoster: state.aiRoster, aiGold: state.aiGold,
         aiPower: state.aiPower, playerLife: state.playerLife, aiLife: state.aiLife,
-        upgrades: state.upgrades, tactics: state.tactics, nextId: state.nextId
+        upgrades: state.upgrades, unitLevels: state.unitLevels, tactics: state.tactics, nextId: state.nextId
     });
 
     hideScreens();
@@ -1374,6 +1385,7 @@ function retryRound() {
     state.playerLife = s.playerLife;
     state.aiLife = s.aiLife;
     state.upgrades = s.upgrades;
+    state.unitLevels = s.unitLevels || {};
     state.tactics = s.tactics;
     state.nextId = s.nextId;
 
@@ -1417,6 +1429,7 @@ function startNewGame(mode) {
     state.aiNote = '';
     state.nextId = 1;
     state.upgrades = {};
+    state.unitLevels = {};
     state.tactics = {};
     state.playerLife = VERSUS_LIFE;
     state.aiLife = VERSUS_LIFE;
@@ -1458,7 +1471,7 @@ function saveGame() {
             round: state.round, gold: state.gold,
             roster: state.roster, aiRoster: state.aiRoster, aiGold: state.aiGold,
             aiPower: state.aiPower, playerLife: state.playerLife, aiLife: state.aiLife,
-            upgrades: state.upgrades, tactics: state.tactics, nextId: state.nextId
+            upgrades: state.upgrades, unitLevels: state.unitLevels, tactics: state.tactics, nextId: state.nextId
         }));
     } catch(e) { /* 保存できない環境では何もしない */ }
 }
@@ -1487,6 +1500,7 @@ function loadGame() {
         state.playerLife = s.playerLife === undefined ? VERSUS_LIFE : s.playerLife;
         state.aiLife = s.aiLife === undefined ? VERSUS_LIFE : s.aiLife;
         state.upgrades = s.upgrades || {};
+        state.unitLevels = s.unitLevels || {};
         state.tactics = s.tactics || {};
         state.nextId = s.nextId || 1;
 
@@ -1507,7 +1521,7 @@ function loadGame() {
         state.snapshot = JSON.stringify({
             round: state.round, gold: state.gold,
             roster: state.roster, aiRoster: state.aiRoster, aiGold: state.aiGold,
-            upgrades: state.upgrades, tactics: state.tactics, nextId: state.nextId
+            upgrades: state.upgrades, unitLevels: state.unitLevels, tactics: state.tactics, nextId: state.nextId
         });
 
         hideScreens();
@@ -1559,6 +1573,12 @@ function buildUnitCard(key, opts) {
     const def = UNIT_DEFS[key];
     const splash = splashRadius(def);
 
+    // レベルアップ済みなら、表示するステータスにもその分を反映する
+    const lvl = o.enemy ? 0 : unitLevel(key);
+    const lvlMult = Math.pow(1 + UNIT_LEVEL_STAT_GAIN, lvl);
+    const dispHp = Math.round(def.hp * lvlMult);
+    const dispDmg = Math.round(Math.abs(def.dmg) * lvlMult) * (def.dmg < 0 ? -1 : 1);
+
     const card = document.createElement('div');
     card.className = 'shop-card';
 
@@ -1575,6 +1595,7 @@ function buildUnitCard(key, opts) {
             <span class="card-type">${reachLabel(def)}</span>
             ${splash ? '<span class="card-type splash">範囲</span>' : ''}
             ${role ? `<span class="card-type">${role}</span>` : ''}
+            ${lvl > 0 ? `<span class="card-lv">Lv.${lvl}</span>` : ''}
             ${o.owned ? `<span class="card-own">×${o.owned}</span>` : ''}
         </div>`;
     head.appendChild(id);
@@ -1589,8 +1610,8 @@ function buildUnitCard(key, opts) {
     const body = document.createElement('div');
     body.innerHTML = `
         <div class="card-stats">
-            <span><b>体力</b>${def.hp}</span>
-            <span><b>攻撃力</b>${def.dmg < 0 ? '回復' + Math.abs(def.dmg) : def.dmg}</span>
+            <span><b>体力</b>${dispHp}</span>
+            <span><b>攻撃力</b>${dispDmg < 0 ? '回復' + Math.abs(dispDmg) : dispDmg}</span>
             <span><b>攻撃間隔</b>${(def.rate / 60).toFixed(2)}秒</span>
             <span><b>移動速度</b>${Math.round(def.speed * 100)}</span>
             <span><b>射程</b>${def.range}</span>
@@ -1600,7 +1621,35 @@ function buildUnitCard(key, opts) {
 
     card.appendChild(head);
     card.appendChild(body);
+
+    // ショップのユニットタブでのみ、そのユニット種のレベルアップ購入を出す
+    if(o.canLevelUp) {
+        const lvup = document.createElement('div');
+        lvup.className = 'card-lvup';
+        lvup.innerHTML = `
+            <button class="lvup-btn" type="button">▲ 強化する</button>
+            <span class="lvup-cost">${unitLevelCost(key, lvl)}G</span>`;
+        lvup.querySelector('.lvup-btn').addEventListener('click', e => {
+            e.stopPropagation();
+            buyUnitLevel(key);
+        });
+        card.appendChild(lvup);
+    }
+
     return card;
+}
+
+// ユニット種別レベルアップの購入
+function buyUnitLevel(key) {
+    const lvl = unitLevel(key);
+    const cost = unitLevelCost(key, lvl);
+    if(state.gold < cost) { toast('ゴールドが足りません'); return; }
+    pushUndo();
+    state.gold -= cost;
+    state.unitLevels[key] = lvl + 1;
+    toast(`${UNIT_DEFS[key].name} が Lv.${lvl + 1} に強化された`);
+    renderShop();
+    saveGame();
 }
 
 function renderShop() {
@@ -1617,7 +1666,7 @@ function renderShop() {
 
         shopUnitsFor(state.mode).forEach(key => {
             const owned = state.roster.filter(r => r.key === key).length;
-            const card = buildUnitCard(key, { owned, showCost: true });
+            const card = buildUnitCard(key, { owned, showCost: true, canLevelUp: true });
             card.dataset.key = key;
             card.addEventListener('click', () => selectShopUnit(key));
             list.appendChild(card);
@@ -1682,7 +1731,9 @@ function renderShop() {
 // フィールド上のユニット（特に敵）をタップすると、その場で
 // ショップと同じ説明カードを出す。色違いで判別しづらい問題への対応。
 // ------------------------------------------------------------
-function showUnitInfo(key, isP, sx, sy) {
+// sellEntry を渡すと（準備フェーズで自ユニットをタップした場合）
+// カードの下に売却ボタンを追加する
+function showUnitInfo(key, isP, sx, sy, sellEntry) {
     const box = document.getElementById('unit-info');
     box.innerHTML = '';
 
@@ -1691,6 +1742,19 @@ function showUnitInfo(key, isP, sx, sy) {
     side.textContent = isP ? '▲ 味方ユニット' : '▼ 敵ユニット';
     box.appendChild(side);
     box.appendChild(buildUnitCard(key, { showCost: false, enemy: !isP }));
+
+    if(sellEntry) {
+        const def = UNIT_DEFS[key];
+        const sell = document.createElement('button');
+        sell.className = 'info-sell-btn';
+        sell.type = 'button';
+        sell.textContent = `売却する（+${def.cost}G）`;
+        sell.addEventListener('click', () => {
+            sellRosterEntry(sellEntry);
+            hideUnitInfo();
+        });
+        box.appendChild(sell);
+    }
 
     box.classList.add('show');
 
@@ -1825,6 +1889,9 @@ function updatePrepUI() {
         if(key) {
             card.classList.toggle('selected', state.selected === key);
             card.classList.toggle('cant-buy', state.gold < UNIT_DEFS[key].cost || state.roster.length >= cap);
+            // レベルアップの可否はユニット本体の購入可否とは独立して判定する
+            const lvupBtn = card.querySelector('.lvup-btn');
+            if(lvupBtn) lvupBtn.disabled = state.gold < unitLevelCost(key, unitLevel(key));
         } else if(card.dataset.upgrade) {
             card.classList.toggle('cant-buy', state.gold < upgradePrice(card.dataset.upgrade));
         } else if(card.dataset.tactic) {
@@ -1859,6 +1926,7 @@ function pushUndo() {
         gold: state.gold,
         roster: state.roster,
         upgrades: state.upgrades,
+        unitLevels: state.unitLevels,
         tactics: state.tactics
     }));
     if(state.undoStack.length > 200) state.undoStack.shift(); // 念のため上限
@@ -1871,6 +1939,7 @@ function undoLastAction() {
     state.gold = snap.gold;
     state.roster = snap.roster;
     state.upgrades = snap.upgrades;
+    state.unitLevels = snap.unitLevels || {};
     state.tactics = snap.tactics;
     state.selected = null;
 
@@ -1974,21 +2043,30 @@ function onPointerMove(e) {
     }
 }
 
-function onPointerUp() {
+// 配置済みユニットを1体売却して全額返金する
+function sellRosterEntry(entry) {
+    pushUndo();
+    const def = UNIT_DEFS[entry.key];
+    state.roster = state.roster.filter(r => r !== entry);
+    state.gold += def.cost;
+    toast(`${def.name} を売却 (+${def.cost}G)`);
+    renderShop();
+    saveGame();
+}
+
+function onPointerUp(e) {
     if(state.scene !== 'prep' || !state.drag) return;
     const d = state.drag;
     state.drag = null;
 
     if(!d.moved) {
-        // タップした配置ユニットを売却して予算に戻す
-        pushUndo();
-        const def = UNIT_DEFS[d.entry.key];
-        state.roster = state.roster.filter(r => r !== d.entry);
-        state.gold += def.cost;
-        toast(`${def.name} を売却 (+${def.cost}G)`);
-        renderShop();
+        // タップだけなら即売却はせず、説明カードを開いて売却ボタンで選ばせる
+        // （移動のつもりでタップした際に誤って売れてしまうのを防ぐため）
+        const p = canvasPos(e);
+        showUnitInfo(d.entry.key, true, p.x, p.y, d.entry);
+    } else {
+        saveGame();
     }
-    saveGame();
 }
 
 // ============================================================
