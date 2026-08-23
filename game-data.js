@@ -2,7 +2,7 @@
 // game-data.js — ユニット / ウェーブ / ボス / ショップ商品の定義
 // ============================================================
 
-// 攻撃タイプの表示名（ショップカードの TYPE 欄で使用）
+// 攻撃タイプの表示名（ショップカードのバッジで使用）
 const TYPE_LABELS = {
     melee:  '近接',
     ranged: '遠距離',
@@ -10,6 +10,30 @@ const TYPE_LABELS = {
     healer: '回復',
     tank:   'タンク'
 };
+
+// ------------------------------------------------------------
+// ステータス表示用のヘルパー
+// 「近接／遠距離」と「範囲攻撃かどうか」は本来別の性質なので、
+// type ひとつにまとめず個別に判定できるようにしている。
+// （例: メイジは遠距離かつ範囲、オークは近接かつ範囲）
+// ------------------------------------------------------------
+
+// 近接か遠距離か
+function reachLabel(def) {
+    return (def.type === 'melee' || def.type === 'tank') ? '近接' : '遠距離';
+}
+
+// 範囲攻撃の半径（0 なら単体攻撃）
+function splashRadius(def) {
+    return def.splash || def.meleeSplash || 0;
+}
+
+// 役割バッジ（近接/遠距離とは別に持たせたい肩書き）
+function roleLabel(def) {
+    if(def.type === 'healer') return '回復';
+    if(def.type === 'tank') return 'タンク';
+    return null;
+}
 
 // ============================================================
 // ユニット定義
@@ -26,12 +50,12 @@ const UNIT_DEFS = {
     // --- プレイヤーが購入できるユニット ---
     knight: {
         name:'ナイト', cost:20, hp:240, dmg:24, range:26, speed:0.80, rate:45,
-        type:'melee', mass:1.4, kb:3, sprite:SPRITES.knight, pal:PALETTES.knight,
-        comment:'重装甲の前衛。敵を力強く押し返す'
+        type:'melee', mass:1.4, kb:0, sprite:SPRITES.knight, pal:PALETTES.knight,
+        comment:'安価で並べられる基本歩兵。押し返さずその場で受け止める壁役'
     },
     archer: {
         name:'アーチャー', cost:30, hp:100, dmg:16, range:150, speed:0.50, rate:50,
-        type:'ranged', mass:0.8, kb:1, sprite:SPRITES.archer, pal:PALETTES.archer,
+        type:'ranged', mass:0.8, kb:0, sprite:SPRITES.archer, pal:PALETTES.archer,
         comment:'安全な距離から弓で攻撃する'
     },
     wizard: {
@@ -41,30 +65,30 @@ const UNIT_DEFS = {
     },
     healer: {
         name:'クレリック', cost:45, hp:140, dmg:-22, range:115, speed:0.50, rate:55,
-        type:'healer', mass:0.8, kb:0.5, sprite:SPRITES.cleric, pal:PALETTES.healer,
+        type:'healer', mass:0.8, kb:0, sprite:SPRITES.cleric, pal:PALETTES.healer,
         comment:'味方ユニットのHPを回復する'
     },
     giant: {
         name:'ゴーレム', cost:90, hp:1200, dmg:75, range:36, speed:0.34, rate:115,
         type:'tank', mass:5.0, kb:30, sprite:SPRITES.giant, pal:PALETTES.giant,
-        comment:'超高耐久の盾役。圧倒的な存在感'
+        comment:'超高耐久の盾役。一撃ごとに敵を大きく吹き飛ばす'
     },
 
     // --- 敵ユニット（AI 対戦モードでは AI も購入する） ---
     goblin: {
         name:'ゴブリン', cost:10, hp:45, dmg:9, range:20, speed:0.95, rate:38,
-        type:'melee', mass:0.5, kb:1, sprite:SPRITES.goblin, pal:PALETTES.goblin,
-        comment:'圧倒的な安さと速さで物量を押し付ける斥候。1体は紙装甲'
+        type:'melee', mass:0.5, kb:0, sprite:SPRITES.goblin, pal:PALETTES.goblin,
+        comment:'最安・最速の物量ユニット。単体攻撃には数で勝てるが範囲攻撃に弱い'
     },
     orc: {
         name:'オーク', cost:36, hp:300, dmg:14, range:28, speed:0.48, rate:72,
-        type:'melee', mass:2.0, kb:4, sprite:SPRITES.orc, pal:PALETTES.orc,
+        type:'melee', mass:2.0, kb:2, sprite:SPRITES.orc, pal:PALETTES.orc,
         meleeSplash:36, meleeSplashRate:0.55,
         comment:'薙ぎ払いで周囲も巻き込む近接アタッカー。ゴーレムより打たれ弱い'
     },
     skeleton: {
         name:'スケルトン', cost:22, hp:36, dmg:9, range:185, speed:0.34, rate:80,
-        type:'ranged', mass:0.4, kb:1, sprite:SPRITES.skeleton, pal:PALETTES.skeleton,
+        type:'ranged', mass:0.4, kb:0, sprite:SPRITES.skeleton, pal:PALETTES.skeleton,
         comment:'アーチャーを凌ぐ超長射程の狙撃役。打たれ弱く動きも遅い'
     },
 
@@ -80,17 +104,17 @@ const UNIT_DEFS = {
     // 同水準に収め、1体だけ個性の際立つ特徴を持たせている。
     warlord: {
         name:'ウォーロード', cost:70, hp:600, dmg:45, range:30, speed:0.42, rate:70,
-        type:'melee', mass:3.0, kb:6, scale:2.4, sprite:SPRITES.boss_orc.idle, pal:PALETTES.boss_goblin,
-        comment:'重量級の指揮官。一撃は重いが動きは鈍い'
+        type:'melee', mass:3.0, kb:14, scale:2.4, sprite:SPRITES.boss_orc.idle, pal:PALETTES.boss_goblin,
+        comment:'重量級の指揮官。一撃は重く、敵を大きく突き飛ばす'
     },
     lich: {
         name:'リッチ', cost:65, hp:180, dmg:26, range:160, speed:0.36, rate:60,
-        type:'ranged', mass:0.9, kb:2, lifesteal:0.35, scale:2.3, sprite:SPRITES.boss_skeleton.idle, pal:PALETTES.boss_assassin,
-        comment:'放った呪詛の一部で自らを回復する死霊術師'
+        type:'ranged', mass:0.9, kb:0, lifesteal:0.35, scale:2.3, sprite:SPRITES.boss_skeleton.idle, pal:PALETTES.boss_assassin,
+        comment:'ドレイン: 与えたダメージの35%を自分のHPに変換する死霊術師'
     },
     drake: {
         name:'ドレイク', cost:85, hp:340, dmg:30, range:120, speed:0.44, rate:75,
-        type:'aoe', mass:1.5, kb:5, splash:52, scale:2.4, sprite:SPRITES.boss_dragon.idle, pal:PALETTES.boss_drake,
+        type:'aoe', mass:1.5, kb:3, splash:52, scale:2.4, sprite:SPRITES.boss_dragon.idle, pal:PALETTES.boss_drake,
         comment:'上空から範囲攻撃を叩き込む小型の竜'
     },
     imp: {
@@ -250,7 +274,7 @@ const TACTIC_DEFS = {
     meteor:   { name:'メテオストーム', icon:'☄️', cost:150, cd:20, desc:'敵全体に120ダメージ（自動発動）' },
     heal:     { name:'マスヒール',     icon:'💚', cost:120, cd:24, desc:'味方全体のHPを35%回復（自動発動）' },
     timewarp: { name:'タイムワープ',   icon:'⏰', cost:110, cd:22, desc:'敵の移動速度を6秒間半減（自動発動）' },
-    angel:    { name:'守護天使',       icon:'👼', cost:180, cd:30, desc:'守護天使を20秒間召喚（自動発動）' }
+    angel:    { name:'守護天使',       icon:'👼', cost:180, cd:30, summons:true, desc:'守護天使を20秒間召喚（自動発動）' }
 };
 
 // ============================================================

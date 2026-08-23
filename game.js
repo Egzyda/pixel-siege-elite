@@ -432,10 +432,8 @@ class Unit {
         if(attacker && attacker.isP && !attacker.isBase && vampireRate() > 0 && attacker.hp !== undefined) {
             attacker.hp = Math.min(attacker.max, attacker.hp + v * vampireRate());
         }
-        // ユニット固有の吸血（リッチなど。陣営を問わず発動する個性の一つ）
-        if(attacker && attacker.def && attacker.def.lifesteal && attacker.hp !== undefined) {
-            attacker.hp = Math.min(attacker.max, attacker.hp + v * attacker.def.lifesteal);
-        }
+        // ユニット固有のドレイン（リッチなど。陣営を問わず発動する個性の一つ）
+        applyLifesteal(attacker, v);
         // 反射装甲（プレイヤー側が受けたダメージのみ）
         if(attacker && this.isP && thornsRate() > 0 && attacker.takeDmg) {
             attacker.takeDmg(v * thornsRate(), null);
@@ -469,6 +467,22 @@ class Unit {
         const box = getSpriteBox(this.def.sprite);
         const topY = this.y - bounce - box.h * this.scale - 6;
         drawHpBar(ctx, this.x, topY, 22, 4, this.hp / this.max, this.isP ? '#10b981' : '#ef4444');
+    }
+}
+
+// ドレイン能力（lifesteal）の適用。
+// 回復していることが画面上で分からないと能力を実感できないため、
+// 実際に回復できた分だけ緑のポップアップとエフェクトを出す。
+function applyLifesteal(attacker, dmg) {
+    if(!attacker || !attacker.def || !attacker.def.lifesteal) return;
+    if(attacker.hp === undefined || attacker.hp <= 0) return;
+
+    const before = attacker.hp;
+    attacker.hp = Math.min(attacker.max, attacker.hp + dmg * attacker.def.lifesteal);
+    const healed = attacker.hp - before;
+    if(healed >= 1) {
+        spawnPop(attacker.x, attacker.y - 30, '+' + Math.floor(healed), '#34d399');
+        state.fx.push({ type:'heal', x: attacker.x, y: attacker.y - 12, life: 18, color: '#34d399' });
     }
 }
 
@@ -662,6 +676,7 @@ class Boss {
         if(attacker && attacker.isP && !attacker.isBase && vampireRate() > 0 && attacker.hp !== undefined) {
             attacker.hp = Math.min(attacker.max, attacker.hp + v * vampireRate());
         }
+        applyLifesteal(attacker, v);
 
         if(this.hp <= 0) {
             this.hp = 0;
@@ -973,6 +988,7 @@ function enterPrep() {
     hideScreens();
     closePauseModal();
     closeShop();
+    hideUnitInfo();
     showPrepBar();
     resize();
     renderShop();
@@ -1019,6 +1035,7 @@ function startBattle() {
     state.battleTimer = BATTLE_TIME[state.mode] || 120 * 60;
     state.paused = false;
 
+    hideUnitInfo();
     showBattleBar();
     resize();
     setSpeed(1);
@@ -1090,19 +1107,54 @@ function endBattle(win, reason) {
 function playVersusLifeAnimation(win, lifeDmg, done) {
     updateVersusHud(); // ダメージ適用前の体力をまず見せる
 
-    setTimeout(() => {
-        if(win) {
-            state.aiLife = Math.max(0, state.aiLife - lifeDmg);
-            spawnPop(state.enemyBase.x, state.enemyBase.y - 40, '-' + lifeDmg, '#ef4444');
-        } else {
-            state.playerLife = Math.max(0, state.playerLife - lifeDmg);
-            spawnPop(state.playerBase.x, state.playerBase.y - 40, '-' + lifeDmg, '#ef4444');
+    // 崩れた拠点から、体力ゲージへ向かって衝撃弾を飛ばす。
+    // 「拠点が壊れた → だから体力が減った」という因果を目で追えるようにする。
+    const fromBase = win ? state.enemyBase : state.playerBase;
+    // 体力ゲージは #versus-hud（stage 上端から約 30px）の左右に並んでいる
+    const targetX = win ? state.w * 0.72 : state.w * 0.28;
+    const targetY = 40;
+    const travelFrames = 34;
+
+    if(fromBase) {
+        // 拠点が砕けるエフェクト
+        for(let i = 0; i < 14; i++) {
+            const a = (Math.PI * 2 / 14) * i;
+            state.fx.push({
+                x: fromBase.x, y: fromBase.y,
+                vx: Math.cos(a) * randRange(1.5, 3.5), vy: Math.sin(a) * randRange(1.5, 3.5) - 1,
+                life: 26, color: win ? '#fbbf24' : '#f87171'
+            });
         }
-        addShake(5);
+        state.fx.push({
+            type: 'lifeshot', t: 0, dur: travelFrames, trail: [],
+            x0: fromBase.x, y0: fromBase.y - 10, x: fromBase.x, y: fromBase.y - 10,
+            tx: targetX, ty: targetY,
+            life: 999, color: win ? '#34d399' : '#ef4444'
+        });
+        addShake(7);
+    }
+
+    // 弾がゲージに着弾したタイミングで体力を減らす
+    const travelMs = travelFrames * (1000 / 60) + 120;
+    setTimeout(() => {
+        if(win) state.aiLife = Math.max(0, state.aiLife - lifeDmg);
+        else    state.playerLife = Math.max(0, state.playerLife - lifeDmg);
+
+        // 着弾の炸裂
+        for(let i = 0; i < 12; i++) {
+            const a = (Math.PI * 2 / 12) * i;
+            state.fx.push({
+                x: targetX, y: targetY,
+                vx: Math.cos(a) * 2.5, vy: Math.sin(a) * 2.5,
+                life: 22, color: '#ef4444'
+            });
+        }
+        spawnPop(targetX, targetY + 16, '-' + lifeDmg, '#ef4444');
+        addShake(6);
         updateVersusHud(); // ここで CSS の width トランジションが走る
 
-        setTimeout(done, 650);
-    }, 350);
+        setTimeout(done, 750);
+    }, travelMs);
 }
 
 function showResultScreen() {
@@ -1344,6 +1396,7 @@ function retryRound() {
     hideScreens();
     closePauseModal();
     closeShop();
+    hideUnitInfo();
     showPrepBar();
     resize();
     renderShop();
@@ -1386,6 +1439,8 @@ function backToTitle() {
     state.boss = null;
     closePauseModal();
     closeShop();
+    closeCodex();
+    hideUnitInfo();
     showPrepBar();
     updateVersusHud();
     document.getElementById('btn-continue').style.display = hasSave() ? '' : 'none';
@@ -1470,8 +1525,11 @@ function loadGame() {
 // ============================================================
 // ショップ UI
 // ============================================================
-function unitIconCanvas(key) {
+// ユニットのアイコン。enemy を指定すると敵側の赤系パレットで描く
+// （フィールド上の見た目と説明カードの色を一致させるため）
+function unitIconCanvas(key, enemy) {
     const def = UNIT_DEFS[key];
+    const pal = enemy ? (ENEMY_PALETTES[key] || def.pal) : def.pal;
     const c = document.createElement('canvas');
     c.className = 'card-icon';
     c.width = 40; c.height = 40;
@@ -1484,12 +1542,65 @@ function unitIconCanvas(key) {
         for(let col = box.minC; col <= box.maxC; col++) {
             const idx = def.sprite[r][col];
             if(idx > 0) {
-                g.fillStyle = def.pal[idx];
+                g.fillStyle = pal[idx];
                 g.fillRect(ox + col * s, oy + r * s, s, s);
             }
         }
     }
     return c;
+}
+
+// ------------------------------------------------------------
+// ユニットカードの共通生成
+// ショップ / ユニット図鑑 / フィールドのタップ説明で同じ見た目を使う
+// ------------------------------------------------------------
+function buildUnitCard(key, opts) {
+    const o = opts || {};
+    const def = UNIT_DEFS[key];
+    const splash = splashRadius(def);
+
+    const card = document.createElement('div');
+    card.className = 'shop-card';
+
+    const head = document.createElement('div');
+    head.className = 'card-head';
+    head.appendChild(unitIconCanvas(key, o.enemy));
+
+    const role = roleLabel(def);
+    const id = document.createElement('div');
+    id.className = 'card-id';
+    id.innerHTML = `
+        <div class="card-name">${def.name}</div>
+        <div class="card-sub">
+            <span class="card-type">${reachLabel(def)}</span>
+            ${splash ? '<span class="card-type splash">範囲</span>' : ''}
+            ${role ? `<span class="card-type">${role}</span>` : ''}
+            ${o.owned ? `<span class="card-own">×${o.owned}</span>` : ''}
+        </div>`;
+    head.appendChild(id);
+
+    if(o.showCost) {
+        const cost = document.createElement('div');
+        cost.className = 'card-cost';
+        cost.textContent = def.cost + 'G';
+        head.appendChild(cost);
+    }
+
+    const body = document.createElement('div');
+    body.innerHTML = `
+        <div class="card-stats">
+            <span><b>体力</b>${def.hp}</span>
+            <span><b>攻撃力</b>${def.dmg < 0 ? '回復' + Math.abs(def.dmg) : def.dmg}</span>
+            <span><b>攻撃間隔</b>${(def.rate / 60).toFixed(2)}秒</span>
+            <span><b>移動速度</b>${Math.round(def.speed * 100)}</span>
+            <span><b>射程</b>${def.range}</span>
+            <span><b>範囲攻撃</b>${splash ? '半径' + splash : 'なし'}</span>
+        </div>
+        <div class="card-comment">${def.comment}</div>`;
+
+    card.appendChild(head);
+    card.appendChild(body);
+    return card;
 }
 
 function renderShop() {
@@ -1505,43 +1616,9 @@ function renderShop() {
         list.appendChild(legend);
 
         shopUnitsFor(state.mode).forEach(key => {
-            const def = UNIT_DEFS[key];
             const owned = state.roster.filter(r => r.key === key).length;
-            const card = document.createElement('div');
-            card.className = 'shop-card';
+            const card = buildUnitCard(key, { owned, showCost: true });
             card.dataset.key = key;
-
-            const head = document.createElement('div');
-            head.className = 'card-head';
-            head.appendChild(unitIconCanvas(key));
-            const id = document.createElement('div');
-            id.className = 'card-id';
-            id.innerHTML = `
-                <div class="card-name">${def.name}</div>
-                <div class="card-sub">
-                    <span class="card-type">${TYPE_LABELS[def.type]}</span>
-                    ${owned ? `<span class="card-own">×${owned}</span>` : ''}
-                </div>`;
-            head.appendChild(id);
-            const cost = document.createElement('div');
-            cost.className = 'card-cost';
-            cost.textContent = def.cost + 'G';
-            head.appendChild(cost);
-
-            const body = document.createElement('div');
-            body.innerHTML = `
-                <div class="card-stats">
-                    <span><b>体力</b>${def.hp}</span>
-                    <span><b>攻撃力</b>${def.dmg < 0 ? '回復' + Math.abs(def.dmg) : def.dmg}</span>
-                    <span><b>攻撃間隔</b>${(def.rate / 60).toFixed(2)}秒</span>
-                    <span><b>移動速度</b>${Math.round(def.speed * 100)}</span>
-                    <span><b>射程</b>${def.range}</span>
-                    <span><b>種別</b>${TYPE_LABELS[def.type]}</span>
-                </div>
-                <div class="card-comment">${def.comment}</div>`;
-
-            card.appendChild(head);
-            card.appendChild(body);
             card.addEventListener('click', () => selectShopUnit(key));
             list.appendChild(card);
         });
@@ -1598,6 +1675,84 @@ function renderShop() {
     }
 
     updatePrepUI();
+}
+
+// ------------------------------------------------------------
+// ユニット説明ポップアップ
+// フィールド上のユニット（特に敵）をタップすると、その場で
+// ショップと同じ説明カードを出す。色違いで判別しづらい問題への対応。
+// ------------------------------------------------------------
+function showUnitInfo(key, isP, sx, sy) {
+    const box = document.getElementById('unit-info');
+    box.innerHTML = '';
+
+    const side = document.createElement('div');
+    side.className = 'info-side ' + (isP ? 'mine' : 'foe');
+    side.textContent = isP ? '▲ 味方ユニット' : '▼ 敵ユニット';
+    box.appendChild(side);
+    box.appendChild(buildUnitCard(key, { showCost: false, enemy: !isP }));
+
+    box.classList.add('show');
+
+    // タップ位置の近くに出しつつ、フィールドからはみ出さないよう収める
+    const stage = document.getElementById('stage').getBoundingClientRect();
+    const w = box.offsetWidth, h = box.offsetHeight;
+    let left = sx - w / 2;
+    let top = sy - h - 22;               // まずはユニットの上に出す
+    if(top < 4) top = sy + 26;           // 上に収まらなければ下へ
+    box.style.left = clamp(left, 6, stage.width - w - 6) + 'px';
+    box.style.top = clamp(top, 4, stage.height - h - 6) + 'px';
+}
+
+function hideUnitInfo() {
+    document.getElementById('unit-info').classList.remove('show');
+}
+
+// 指定座標にいるユニット（準備フェーズは編成データ、バトル中は実体）を探す
+function unitAtPoint(x, y) {
+    // バトル中は実際に動いているユニットから探す
+    if(state.scene === 'battle') {
+        let hit = null, bd = 26;
+        state.units.forEach(u => {
+            const d = Math.hypot(u.x - x, u.y - y - 12);
+            if(d < bd) { bd = d; hit = { key: u.key, isP: u.isP }; }
+        });
+        return hit;
+    }
+    // 準備フェーズは敵（AI編成）のみ対象。味方のタップは売却に使うため
+    let hit = null, bd = 26;
+    state.aiRoster.forEach(r => {
+        const d = Math.hypot(r.x - x, r.y - y - 10);
+        if(d < bd) { bd = d; hit = { key: r.key, isP: false }; }
+    });
+    return hit;
+}
+
+// ------------------------------------------------------------
+// ユニット図鑑（タイトル画面から開く一覧）
+// ------------------------------------------------------------
+function openCodex() {
+    const list = document.getElementById('codex-list');
+    list.innerHTML = '';
+
+    const groups = [
+        { label: '基本ユニット（全モード）', keys: SHOP_UNITS },
+        { label: 'エリートユニット（SURVIVAL / VERSUS 限定）', keys: ELITE_UNITS },
+        { label: '戦術で召喚', keys: ['angel'] }
+    ];
+    groups.forEach(g => {
+        const head = document.createElement('div');
+        head.className = 'codex-group';
+        head.textContent = g.label;
+        list.appendChild(head);
+        g.keys.forEach(key => list.appendChild(buildUnitCard(key, { showCost: true })));
+    });
+
+    document.getElementById('codex-sheet').classList.add('show');
+}
+
+function closeCodex() {
+    document.getElementById('codex-sheet').classList.remove('show');
 }
 
 // ------------------------------------------------------------
@@ -1755,9 +1910,25 @@ function rosterAt(x, y) {
 }
 
 function onPointerDown(e) {
+    // バトル中でも「説明を見る」だけは許可する（操作ではなく情報表示のため）
+    if(state.scene === 'battle') {
+        const bp = canvasPos(e);
+        const info = unitAtPoint(bp.x, bp.y);
+        if(info) showUnitInfo(info.key, info.isP, bp.x, bp.y);
+        else hideUnitInfo();
+        return;
+    }
+
     if(state.scene !== 'prep') return;
     const p = canvasPos(e);
     const lay = layout();
+    hideUnitInfo();
+
+    // 敵ユニットをタップしたら説明を表示する（配置・売却の対象にはしない）
+    if(!state.selected) {
+        const foe = unitAtPoint(p.x, p.y);
+        if(foe) { showUnitInfo(foe.key, foe.isP, p.x, p.y); return; }
+    }
 
     // ユニット選択中 → 配置
     if(state.selected) {
@@ -1916,6 +2087,17 @@ function updateFx(dt) {
 
     state.fx.forEach(f => {
         if(f.type === 'laser' || f.type === 'heal') { f.life -= dt; return; }
+        if(f.type === 'lifeshot') {
+            // 破壊された拠点から体力ゲージへ向かう弾（緩やかに加速させる）
+            f.t = Math.min(1, f.t + dt / f.dur);
+            const e = f.t * f.t;
+            f.x = f.x0 + (f.tx - f.x0) * e;
+            f.y = f.y0 + (f.ty - f.y0) * e;
+            f.trail.push({ x: f.x, y: f.y });
+            if(f.trail.length > 10) f.trail.shift();
+            if(f.t >= 1) f.life = 0;
+            return;
+        }
         f.x += f.vx * dt;
         f.y += f.vy * dt;
         f.vy += 0.06 * dt;
@@ -1989,17 +2171,39 @@ function updateSiegeCollapse(dt) {
     }
 }
 
+// 味方が全滅しても、召喚系の戦術が残っていれば盤面はまだ動く
+function hasPendingSummon() {
+    return Object.keys(state.tactics).some(k => TACTIC_DEFS[k] && TACTIC_DEFS[k].summons);
+}
+
 function checkBattleEnd() {
     if(state.scene !== 'battle') return;
 
     if(state.playerBase.hp <= 0) { endBattle(false, '自拠点が破壊された'); return; }
 
+    const alliesAlive = state.units.some(u => u.isP);
+    const foesAlive = state.units.some(u => !u.isP) || !!state.boss;
+
     if(state.mode === 'story') {
         if(state.bossCleared) { endBattle(true); return; }
+
+        // 味方が全滅し、召喚の見込みもない場合は勝ち目が無いので即敗北にする
+        // （拠点だけが残って延々と削られるのを待たせない）
+        if(!alliesAlive && !hasPendingSummon()) {
+            endBattle(false, '味方が全滅した');
+            return;
+        }
         if(state.battleTimer <= 0) { endBattle(false, '制限時間内に討伐できなかった'); return; }
     } else {
         if(!state.enemyBase) return;
         if(state.enemyBase.hp <= 0) { endBattle(true); return; }
+
+        // 相打ちで両軍が全滅した場合、以降は誰も拠点を攻撃できないので
+        // 時間切れを待たずにその場で判定する
+        if(!alliesAlive && !foesAlive && !hasPendingSummon()) {
+            judgeTimeout('wipeout');
+            return;
+        }
         if(state.battleTimer <= 0) {
             judgeTimeout();
             return;
@@ -2011,24 +2215,28 @@ function checkBattleEnd() {
 // 1) 拠点 HP の割合が高いほうが勝ち
 // 2) 同率なら生き残った戦力（コスト合計）が多いほうが勝ち
 // 3) それも同じなら引き分け
-function judgeTimeout() {
+// 決着がつかなかった場合の判定。
+// 時間切れと「相打ちで両軍全滅」の両方から呼ばれるため、
+// 理由の文言だけ切り替えられるようにしている。
+function judgeTimeout(cause) {
+    const label = (cause === 'wipeout') ? '相打ち' : '時間切れ';
     const mine = state.playerBase.hp / state.playerBase.maxHp;
     const foe = state.enemyBase.hp / state.enemyBase.maxHp;
 
     if(Math.abs(mine - foe) > 0.001) {
-        if(mine > foe) endBattle(true, '時間切れ（拠点HP判定で勝利）');
-        else endBattle(false, '時間切れ（拠点HP判定で敗北）');
+        if(mine > foe) endBattle(true, `${label}（拠点HP判定で勝利）`);
+        else endBattle(false, `${label}（拠点HP判定で敗北）`);
         return;
     }
 
     const tally = collectBattleResult();
     if(tally.playerValue !== tally.enemyValue) {
         const win = tally.playerValue > tally.enemyValue;
-        endBattle(win, win ? '時間切れ（残存戦力で勝利）' : '時間切れ（残存戦力で敗北）');
+        endBattle(win, win ? `${label}（残存戦力で勝利）` : `${label}（残存戦力で敗北）`);
         return;
     }
 
-    endBattle(null, '時間切れ（引き分け）');
+    endBattle(null, `${label}（引き分け）`);
 }
 
 // ============================================================
@@ -2223,6 +2431,27 @@ function draw() {
     // エフェクト（上層）
     state.fx.forEach(f => {
         if(f.type === 'laser') return;
+
+        // 拠点 → 体力ゲージへ飛ぶ衝撃弾（尾を引かせて視線を誘導する）
+        if(f.type === 'lifeshot') {
+            f.trail.forEach((pt, i) => {
+                ctx.globalAlpha = (i / f.trail.length) * 0.5;
+                ctx.fillStyle = f.color;
+                ctx.beginPath();
+                ctx.arc(pt.x, pt.y, 2 + i * 0.35, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(f.x, f.y, 5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = f.color;
+            ctx.lineWidth = 3;
+            ctx.stroke();
+            return;
+        }
+
         ctx.globalAlpha = clamp(f.life / 26, 0, 1);
         if(f.type === 'heal') {
             ctx.strokeStyle = f.color;
@@ -2429,6 +2658,14 @@ function bindEvents() {
     document.getElementById('btn-howto').addEventListener('click', openHowto);
     document.getElementById('btn-close-howto').addEventListener('click', closeHowto);
     document.getElementById('btn-howto-done').addEventListener('click', closeHowto);
+    document.getElementById('btn-codex').addEventListener('click', openCodex);
+    document.getElementById('btn-close-codex').addEventListener('click', closeCodex);
+    document.getElementById('btn-codex-done').addEventListener('click', closeCodex);
+    document.getElementById('codex-sheet').addEventListener('click', e => {
+        if(e.target.id === 'codex-sheet') closeCodex();
+    });
+    // 説明ポップアップ自体をタップしたら閉じる
+    document.getElementById('unit-info').addEventListener('click', hideUnitInfo);
     document.getElementById('btn-update').addEventListener('click', forceUpdate);
 
     // モード選択

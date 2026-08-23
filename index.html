@@ -414,6 +414,8 @@ body {
     border-radius: 4px;
     padding: 0 4px;
 }
+/* 範囲攻撃を持つユニットは一目で分かるよう色を変える */
+.card-type.splash { background: var(--accent); }
 .card-own { font-size: 9px; font-weight: 800; color: var(--green); }
 .card-cost { font-size: 13px; font-weight: 900; color: var(--gold); white-space: nowrap; }
 .card-stats {
@@ -695,6 +697,60 @@ body {
 }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
 #toast.high { bottom: auto; top: 60px; }
+
+/* ============================================================
+   フィールド上のユニット説明ポップアップ
+   （色違いで見分けづらいユニットをタップして確認するためのもの）
+   ============================================================ */
+#unit-info {
+    position: absolute;
+    width: 205px;
+    background: rgba(15,23,42,0.97);
+    border: 1px solid var(--accent);
+    border-radius: 12px;
+    padding: 8px;
+    display: none;
+    z-index: 40;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.55);
+}
+#unit-info.show { display: block; }
+#unit-info .shop-card {
+    border: none;
+    background: transparent;
+    padding: 0;
+    cursor: default;
+}
+#unit-info .shop-card:active { transform: none; }
+.info-side {
+    font-size: 9px;
+    font-weight: 800;
+    margin-bottom: 4px;
+    letter-spacing: 0.5px;
+}
+.info-side.mine { color: var(--green); }
+.info-side.foe { color: var(--red); }
+
+/* 図鑑は1列でゆったり表示する */
+#codex-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 2px 2px 8px;
+}
+.codex-group {
+    font-size: 9px;
+    letter-spacing: 1.5px;
+    color: var(--muted);
+    font-weight: 800;
+    padding: 6px 2px 0;
+}
+#codex-list .shop-card { cursor: default; }
+#codex-list .shop-card:active { transform: none; }
 </style>
 </head>
 <body>
@@ -723,6 +779,9 @@ body {
 
         <div id="tactic-hud"></div>
         <div id="toast"></div>
+
+        <!-- フィールドのユニットをタップしたときの説明ポップアップ -->
+        <div id="unit-info"></div>
     </div>
 
     <!-- 下部バー -->
@@ -836,6 +895,21 @@ body {
         </div>
     </div>
 
+    <!-- ユニット図鑑（ボトムシート） -->
+    <div class="sheet-backdrop" id="codex-sheet">
+        <div class="sheet">
+            <div class="sheet-grip"></div>
+            <div class="sheet-head">
+                <div class="sheet-title">ユニット図鑑</div>
+                <button class="sheet-close" id="btn-close-codex">✕</button>
+            </div>
+            <div id="codex-list"></div>
+            <div class="sheet-foot">
+                <button class="btn primary" id="btn-codex-done">とじる</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 一時停止モーダル -->
     <div class="modal-backdrop" id="pause-modal">
         <div class="modal-box">
@@ -857,6 +931,7 @@ body {
 
         <button class="menu-btn big fill" id="btn-newgame">START</button>
         <button class="menu-btn big blue" id="btn-continue" style="display:none">CONTINUE</button>
+        <button class="menu-btn plain" id="btn-codex">ユニット図鑑</button>
         <button class="menu-btn plain" id="btn-howto">? あそびかた</button>
 
         <button class="corner-btn" id="btn-update">⟳ 更新</button>
