@@ -69,16 +69,16 @@ const UNIT_DEFS = {
         comment:'味方ユニットのHPを回復する'
     },
     giant: {
-        name:'ゴーレム', cost:90, hp:1200, dmg:75, range:36, speed:0.34, rate:115,
+        name:'ゴーレム', cost:90, hp:1200, dmg:58, range:36, speed:0.34, rate:115,
         type:'tank', mass:5.0, kb:30, sprite:SPRITES.giant, pal:PALETTES.giant,
-        comment:'超高耐久の盾役。一撃ごとに敵を大きく吹き飛ばす'
+        comment:'圧倒的な耐久と引き換えに火力は控えめな純粋な盾役'
     },
 
     // --- 敵ユニット（AI 対戦モードでは AI も購入する） ---
     goblin: {
-        name:'ゴブリン', cost:10, hp:45, dmg:9, range:20, speed:0.95, rate:38,
+        name:'ゴブリン', cost:10, hp:45, dmg:11, range:20, speed:0.95, rate:32,
         type:'melee', mass:0.5, kb:0, sprite:SPRITES.goblin, pal:PALETTES.goblin,
-        comment:'最安・最速の物量ユニット。単体攻撃には数で勝てるが範囲攻撃に弱い'
+        comment:'最安・最速の物量ユニット。数を並べた時の総火力はナイトを上回るが打たれ弱く、範囲攻撃に弱い'
     },
     orc: {
         name:'オーク', cost:36, hp:300, dmg:14, range:28, speed:0.48, rate:72,
@@ -143,7 +143,10 @@ const MAX_UNITS = 15;
 const MAX_UNITS_SURVIVAL = 60;
 
 function maxUnitsFor(mode) {
-    return mode === 'survival' ? MAX_UNITS_SURVIVAL : MAX_UNITS;
+    // VERSUS / SURVIVAL は物量ビルド（安いユニットで押す）が15体の枠で
+    // 頭打ちになってしまわないよう、実質無制限（安全上限のみ）にする。
+    // STORY は全7ステージの難易度を15体前提で調整済みのため据え置き。
+    return mode === 'story' ? MAX_UNITS : MAX_UNITS_SURVIVAL;
 }
 
 // ============================================================

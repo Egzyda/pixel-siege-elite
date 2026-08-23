@@ -1439,7 +1439,7 @@ function startNewGame(mode) {
     const diff = AI_PRESETS[state.difficulty].label;
     if(mode === 'story') toast('STORY モード開始');
     else if(mode === 'survival') toast(`SURVIVAL 開始（${diff}）— 配置上限なし`);
-    else toast(`VERSUS 開始（${diff}）— 体力 ${VERSUS_LIFE}`);
+    else toast(`VERSUS 開始（${diff}）— 体力 ${VERSUS_LIFE} / 配置上限なし`);
 }
 
 function backToTitle() {
@@ -1879,9 +1879,9 @@ function updatePrepUI() {
     document.getElementById('gold-val').textContent = state.gold;
     document.getElementById('sheet-gold').textContent = state.gold;
     const dep = document.getElementById('deploy-box');
-    dep.textContent = state.mode === 'survival'
-        ? `配置 ${state.roster.length}体（上限なし）`
-        : `配置 ${state.roster.length}/${cap}`;
+    dep.textContent = (state.mode === 'story')
+        ? `配置 ${state.roster.length}/${cap}`
+        : `配置 ${state.roster.length}体（上限なし）`;
     dep.classList.toggle('full', state.roster.length >= cap);
 
     document.querySelectorAll('#shop-list .shop-card').forEach(card => {
