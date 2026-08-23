@@ -25,59 +25,93 @@ const TYPE_LABELS = {
 const UNIT_DEFS = {
     // --- プレイヤーが購入できるユニット ---
     knight: {
-        name:'KNIGHT', cost:20, hp:240, dmg:24, range:26, speed:0.80, rate:45,
+        name:'ナイト', cost:20, hp:240, dmg:24, range:26, speed:0.80, rate:45,
         type:'melee', mass:1.4, kb:3, sprite:SPRITES.knight, pal:PALETTES.knight,
         comment:'重装甲の前衛。敵を力強く押し返す'
     },
     archer: {
-        name:'ARCHER', cost:30, hp:100, dmg:16, range:150, speed:0.50, rate:50,
+        name:'アーチャー', cost:30, hp:100, dmg:16, range:150, speed:0.50, rate:50,
         type:'ranged', mass:0.8, kb:1, sprite:SPRITES.archer, pal:PALETTES.archer,
         comment:'安全な距離から弓で攻撃する'
     },
     wizard: {
-        name:'MAGE', cost:55, hp:95, dmg:38, range:135, speed:0.42, rate:80,
+        name:'メイジ', cost:55, hp:95, dmg:38, range:135, speed:0.42, rate:80,
         type:'aoe', mass:0.7, kb:8, splash:46, sprite:SPRITES.wizard, pal:PALETTES.wizard,
         comment:'広範囲の魔法攻撃。群れに有効'
     },
     healer: {
-        name:'CLERIC', cost:45, hp:140, dmg:-22, range:115, speed:0.50, rate:55,
+        name:'クレリック', cost:45, hp:140, dmg:-22, range:115, speed:0.50, rate:55,
         type:'healer', mass:0.8, kb:0.5, sprite:SPRITES.cleric, pal:PALETTES.healer,
         comment:'味方ユニットのHPを回復する'
     },
     giant: {
-        name:'GOLEM', cost:90, hp:1200, dmg:75, range:36, speed:0.34, rate:115,
+        name:'ゴーレム', cost:90, hp:1200, dmg:75, range:36, speed:0.34, rate:115,
         type:'tank', mass:5.0, kb:30, sprite:SPRITES.giant, pal:PALETTES.giant,
         comment:'超高耐久の盾役。圧倒的な存在感'
     },
 
     // --- 敵ユニット（AI 対戦モードでは AI も購入する） ---
     goblin: {
-        name:'GOBLIN', cost:12, hp:70, dmg:12, range:22, speed:0.72, rate:48,
-        type:'melee', mass:0.6, kb:1, sprite:SPRITES.goblin, pal:PALETTES.goblin,
-        comment:'数で押し寄せる小型の斥候'
+        name:'ゴブリン', cost:10, hp:45, dmg:9, range:20, speed:0.95, rate:38,
+        type:'melee', mass:0.5, kb:1, sprite:SPRITES.goblin, pal:PALETTES.goblin,
+        comment:'圧倒的な安さと速さで物量を押し付ける斥候。1体は紙装甲'
     },
     orc: {
-        name:'ORC', cost:26, hp:150, dmg:24, range:26, speed:0.52, rate:58,
-        type:'melee', mass:1.6, kb:3, sprite:SPRITES.orc, pal:PALETTES.orc,
-        comment:'鈍重だが打撃力の高い戦士'
+        name:'オーク', cost:36, hp:300, dmg:14, range:28, speed:0.48, rate:72,
+        type:'melee', mass:2.0, kb:4, sprite:SPRITES.orc, pal:PALETTES.orc,
+        meleeSplash:36, meleeSplashRate:0.55,
+        comment:'薙ぎ払いで周囲も巻き込む近接アタッカー。ゴーレムより打たれ弱い'
     },
     skeleton: {
-        name:'SKELETON', cost:18, hp:55, dmg:10, range:105, speed:0.40, rate:65,
-        type:'ranged', mass:0.5, kb:1, sprite:SPRITES.skeleton, pal:PALETTES.skeleton,
-        comment:'脆いが射程の長い不死の射手'
+        name:'スケルトン', cost:22, hp:36, dmg:9, range:185, speed:0.34, rate:80,
+        type:'ranged', mass:0.4, kb:1, sprite:SPRITES.skeleton, pal:PALETTES.skeleton,
+        comment:'アーチャーを凌ぐ超長射程の狙撃役。打たれ弱く動きも遅い'
     },
 
     // --- 戦術で召喚される特殊ユニット（ショップには並ばない） ---
     angel: {
-        name:'ANGEL', cost:0, hp:900, dmg:70, range:130, speed:0.64, rate:40,
+        name:'エンジェル', cost:0, hp:900, dmg:70, range:130, speed:0.64, rate:40,
         type:'ranged', mass:2.0, kb:5, sprite:SPRITES.angel, pal:PALETTES.angel,
         comment:'戦術で召喚される守護天使'
+    },
+
+    // --- エリートユニット（SURVIVAL / VERSUS 限定で購入可能） ---
+    // ストーリーのボスと同じスプライトを縮小して流用するが、能力は通常ユニットと
+    // 同水準に収め、1体だけ個性の際立つ特徴を持たせている。
+    warlord: {
+        name:'ウォーロード', cost:70, hp:600, dmg:45, range:30, speed:0.42, rate:70,
+        type:'melee', mass:3.0, kb:6, scale:2.4, sprite:SPRITES.boss_orc.idle, pal:PALETTES.boss_goblin,
+        comment:'重量級の指揮官。一撃は重いが動きは鈍い'
+    },
+    lich: {
+        name:'リッチ', cost:65, hp:180, dmg:26, range:160, speed:0.36, rate:60,
+        type:'ranged', mass:0.9, kb:2, lifesteal:0.35, scale:2.3, sprite:SPRITES.boss_skeleton.idle, pal:PALETTES.boss_assassin,
+        comment:'放った呪詛の一部で自らを回復する死霊術師'
+    },
+    drake: {
+        name:'ドレイク', cost:85, hp:340, dmg:30, range:120, speed:0.44, rate:75,
+        type:'aoe', mass:1.5, kb:5, splash:52, scale:2.4, sprite:SPRITES.boss_dragon.idle, pal:PALETTES.boss_drake,
+        comment:'上空から範囲攻撃を叩き込む小型の竜'
+    },
+    imp: {
+        name:'インプ', cost:55, hp:130, dmg:34, range:24, speed:0.90, rate:40,
+        type:'melee', mass:1.0, kb:8, scale:2.2, sprite:SPRITES.boss_demon.idle, pal:PALETTES.boss_titan,
+        comment:'圧倒的な速さで急襲する俊敏な小悪魔。打たれ弱い'
     }
 };
 
 // ショップに並べるユニット（表示順）
 // ボス以外はプレイヤー・AI ともに全種類を購入できる
 const SHOP_UNITS = ['knight', 'archer', 'wizard', 'healer', 'giant', 'goblin', 'orc', 'skeleton'];
+
+// SURVIVAL / VERSUS 限定で追加購入できるエリートユニット
+// （ストーリーの世界観を保つため、ストーリーモードには出さない）
+const ELITE_UNITS = ['warlord', 'lich', 'drake', 'imp'];
+
+// 現在のモードで購入できるユニット一覧を返す
+function shopUnitsFor(mode) {
+    return (mode === 'story') ? SHOP_UNITS : SHOP_UNITS.concat(ELITE_UNITS);
+}
 
 // 同時に配置できるユニット数の上限（モード別）
 // SURVIVAL は「無制限」だが、描画・処理が破綻しないよう安全上限だけ設けている
@@ -121,24 +155,24 @@ const WAVE_CONFIGS = {
         { enemies: [{type:'skeleton', count:3}, {type:'orc', count:1}], delay: 300 }
     ]},
     4: { enemyWaves: [
-        { enemies: [{type:'goblin', count:4}, {type:'skeleton', count:2}], delay: 60 },
-        { enemies: [{type:'orc', count:2}, {type:'skeleton', count:2}], delay: 300 },
-        { enemies: [{type:'orc', count:3}, {type:'skeleton', count:2}], delay: 300 }
+        { enemies: [{type:'goblin', count:5}, {type:'skeleton', count:2}], delay: 60 },
+        { enemies: [{type:'orc', count:1}, {type:'skeleton', count:2}], delay: 300 },
+        { enemies: [{type:'orc', count:2}, {type:'skeleton', count:2}], delay: 300 }
     ]},
     5: { enemyWaves: [
-        { enemies: [{type:'skeleton', count:5}, {type:'orc', count:3}], delay: 60 },
-        { enemies: [{type:'skeleton', count:4}, {type:'orc', count:4}], delay: 280 },
-        { enemies: [{type:'skeleton', count:5}, {type:'orc', count:4}, {type:'goblin', count:4}], delay: 280 }
+        { enemies: [{type:'skeleton', count:4}, {type:'orc', count:2}], delay: 60 },
+        { enemies: [{type:'skeleton', count:3}, {type:'orc', count:2}], delay: 280 },
+        { enemies: [{type:'skeleton', count:4}, {type:'orc', count:2}, {type:'goblin', count:5}], delay: 280 }
     ]},
     6: { enemyWaves: [
-        { enemies: [{type:'orc', count:4}, {type:'skeleton', count:4}], delay: 60 },
-        { enemies: [{type:'orc', count:5}, {type:'skeleton', count:4}], delay: 280 },
-        { enemies: [{type:'orc', count:5}, {type:'skeleton', count:4}, {type:'goblin', count:5}], delay: 280 }
+        { enemies: [{type:'orc', count:1}, {type:'skeleton', count:2}], delay: 60 },
+        { enemies: [{type:'orc', count:2}, {type:'skeleton', count:2}], delay: 280 },
+        { enemies: [{type:'orc', count:2}, {type:'skeleton', count:2}, {type:'goblin', count:5}], delay: 280 }
     ]},
     7: { enemyWaves: [
-        { enemies: [{type:'goblin', count:8}, {type:'orc', count:5}], delay: 60 },
-        { enemies: [{type:'orc', count:7}, {type:'skeleton', count:6}], delay: 280 },
-        { enemies: [{type:'orc', count:8}, {type:'skeleton', count:8}], delay: 280 }
+        { enemies: [{type:'goblin', count:10}, {type:'orc', count:2}], delay: 60 },
+        { enemies: [{type:'orc', count:3}, {type:'skeleton', count:5}], delay: 280 },
+        { enemies: [{type:'orc', count:4}, {type:'skeleton', count:5}], delay: 280 }
     ]}
 };
 
@@ -149,37 +183,37 @@ const STORY_LAST_WAVE = 7;
 // ============================================================
 const BOSS_DEFS = {
     1: {
-        name:'Goblin Warchief', hp:500, dmg:22, speed:0.56, special:'summon',
+        name:'ゴブリン大王', hp:500, dmg:22, speed:0.56, special:'summon',
         palette:PALETTES.boss_goblin, sprite:SPRITES.boss_orc,
         summonType:'goblin', summonCount:2, summonInterval:300
     },
     2: {
-        name:'Stone Golem', hp:850, dmg:34, speed:0.32, special:'armor',
+        name:'ストーンゴーレム', hp:850, dmg:34, speed:0.32, special:'armor',
         palette:PALETTES.boss_golem, sprite:SPRITES.giant,
         armorReduction:0.55 // 被ダメージを 55% に軽減
     },
     3: {
-        name:'Shadow Assassin', hp:1150, dmg:42, speed:0.88, special:'teleport',
+        name:'シャドウアサシン', hp:1150, dmg:42, speed:0.88, special:'teleport',
         palette:PALETTES.boss_assassin, sprite:SPRITES.boss_skeleton,
         teleportInterval:260
     },
     4: {
-        name:'Flame Drake', hp:2200, dmg:48, speed:0.48, special:'fire',
+        name:'フレイムドレイク', hp:2200, dmg:48, speed:0.48, special:'fire',
         palette:PALETTES.boss_drake, sprite:SPRITES.boss_dragon,
         fireInterval:170, fireDamage:38, fireRadius:100
     },
     5: {
-        name:'Necro Lord', hp:2900, dmg:52, speed:0.40, special:'revive',
+        name:'ネクロロード', hp:2900, dmg:52, speed:0.40, special:'revive',
         palette:PALETTES.boss_necro, sprite:SPRITES.boss_skeleton,
         reviveInterval:260, reviveCount:3
     },
     6: {
-        name:'Ancient Construct', hp:3800, dmg:76, speed:0.24, special:'laser',
+        name:'エンシェントコンストラクト', hp:3400, dmg:66, speed:0.24, special:'laser',
         palette:PALETTES.boss_construct, sprite:SPRITES.giant,
-        laserInterval:250, laserDamage:120
+        laserInterval:280, laserDamage:95
     },
     7: {
-        name:'Chaos Titan', hp:6200, dmg:95, speed:0.36, special:'phases',
+        name:'カオスタイタン', hp:6200, dmg:95, speed:0.36, special:'phases',
         palette:PALETTES.boss_titan, sprite:SPRITES.boss_demon,
         phases: [
             { hpThreshold:1.0,  speedMult:1.0, damageMult:1.0 },
@@ -232,19 +266,21 @@ const AI_PRESETS = {
     easy: {
         label:'EASY', desc:'安くて数の多い編成',
         budgetMult:1.5, powerStep:0.02, counterStrength:0,
-        pool:[{key:'goblin', w:6}, {key:'orc', w:2}, {key:'skeleton', w:2}]
+        pool:[{key:'goblin', w:6}, {key:'orc', w:2}, {key:'skeleton', w:2}, {key:'imp', w:1}]
     },
     normal: {
         label:'NORMAL', desc:'バランス型。こちらの編成も見てくる',
-        budgetMult:1.05, powerStep:0.04, counterStrength:0.45,
+        budgetMult:0.92, powerStep:0.02, counterStrength:0.3,
         pool:[{key:'knight', w:3}, {key:'archer', w:3}, {key:'orc', w:2},
-              {key:'skeleton', w:2}, {key:'goblin', w:2}, {key:'wizard', w:1}]
+              {key:'skeleton', w:2}, {key:'goblin', w:2}, {key:'wizard', w:1},
+              {key:'warlord', w:1}, {key:'lich', w:1}, {key:'imp', w:1}]
     },
     hard: {
         label:'HARD', desc:'高コスト特化。徹底的に対策してくる',
-        budgetMult:1.25, powerStep:0.06, counterStrength:1.0,
+        budgetMult:1.05, powerStep:0.04, counterStrength:0.65,
         pool:[{key:'wizard', w:3}, {key:'giant', w:2}, {key:'knight', w:2},
-              {key:'archer', w:2}, {key:'healer', w:1}, {key:'orc', w:1}]
+              {key:'archer', w:2}, {key:'healer', w:1}, {key:'orc', w:1},
+              {key:'warlord', w:2}, {key:'lich', w:2}, {key:'drake', w:2}, {key:'imp', w:1}]
     }
 };
 
@@ -298,7 +334,7 @@ const AI_POWER_MAX = {        // モード別の上限倍率
 const VERSUS_LIFE = 100;        // 初期体力
 const VERSUS_DMG_COEF = 0.18;   // 生存ユニットのコスト合計に掛ける係数
 const VERSUS_DMG_MIN = 8;       // 最低ダメージ
-const VERSUS_DMG_MAX = 30;      // 最大ダメージ（1ラウンドで決着しすぎないように）
+const VERSUS_DMG_MAX = 26;      // 最大ダメージ（連敗時に一気に詰みにくくする）
 
 // ラウンドごとの制限時間（フレーム）
 const BATTLE_TIME = {
@@ -310,3 +346,15 @@ const BATTLE_TIME = {
 // 拠点の基本ステータス
 const BASE_HP = 1500;      // 拠点の最大HP
 const BASE_RADIUS = 26;    // 拠点の当たり判定半径（この距離まで近づくと攻撃できる）
+
+// ============================================================
+// 敵側ユニット用の赤系パレットを自動生成する。
+// プレイヤーも敵ユニット（goblin・エリートユニットなど）を購入できるため、
+// 全ユニットぶんの敵カラーを用意して陣営を一目で見分けられるようにする。
+// エリートユニットはボス用パレットを流用しているので、キー名ではなく
+// UNIT_DEFS 側の実際のパレットを起点に赤系へ寄せる。
+// ============================================================
+const ENEMY_PALETTES = {};
+Object.keys(UNIT_DEFS).forEach(k => {
+    ENEMY_PALETTES[k] = tintPalette(UNIT_DEFS[k].pal, '#dc2626', 0.5);
+});

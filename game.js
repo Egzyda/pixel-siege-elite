@@ -40,6 +40,7 @@ const state = {
     shopTab: 'units',         // ショップの表示タブ
     selected: null,           // 選択中のショップユニット
     drag: null,               // ドラッグ中の配置ユニット
+    undoStack: [],            // このラウンドの購入/売却操作の履歴（ひとつ戻す用）
 
     spawnQueue: [],           // 未出現の敵集団（ステージモード）
     spawnTimer: 0,
@@ -57,6 +58,8 @@ const state = {
 
     playerLife: 0,            // VERSUS モードのプレイヤー体力
     aiLife: 0,                // VERSUS モードの AI 体力
+    enemySiege: false,        // 敵の防衛ユニットが全滅し、拠点が急速に崩壊中
+    playerSiege: false,       // 自分の防衛ユニットが全滅し、拠点が急速に崩壊中
     aiNote: '',               // AI がどう対策してきたかのヒント文
     records: null             // プレイ記録（localStorage に永続化）
 };
@@ -70,6 +73,9 @@ const isVsMode = () => state.mode === 'survival' || state.mode === 'versus';
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const randRange = (min, max) => min + Math.random() * (max - min);
+
+// ユニットの描画スケール（UNIT_DEFS 側で個別指定がなければ既定値を使う）
+const unitScale = key => UNIT_DEFS[key].scale || (key === 'giant' ? 3 : 2);
 
 // ダメージ表示などのポップアップ
 function spawnPop(x, y, text, color) {
@@ -154,6 +160,14 @@ class Base {
         this.flash = 0;
         this.shake = 0;
         this.scale = 3;
+
+        // 拠点も射程内の敵ユニットに向けて弱いながら応戦する
+        // （プレイヤー自身の火力源ではなく、丸腰に見えないための最低限の抑止力）
+        this.dmg = 14;
+        this.range = 95;
+        this.rate = 55;
+        this.cd = randRange(0, this.rate); // 初弾のタイミングをずらす
+
         this.reposition();
     }
 
@@ -180,9 +194,29 @@ class Base {
         this.hp = Math.min(this.maxHp, this.hp + v);
     }
 
-    update() {
+    update(dt) {
+        dt = dt || 1;
         if(this.flash > 0) this.flash--;
         if(this.shake > 0) this.shake *= 0.86;
+        if(this.hp <= 0) return;
+
+        // 射程内の最も近い敵ユニットへ弱い援護射撃を行う
+        if(this.cd > 0) { this.cd -= dt; return; }
+
+        let target = null, bd = Infinity;
+        for(const u of state.units) {
+            if(u.isP === this.isP || u.hp <= 0) continue;
+            const d = dist(u, this);
+            if(d < bd && d <= this.range) { bd = d; target = u; }
+        }
+        if(target) {
+            this.cd = this.rate;
+            state.projs.push({
+                x: this.x, y: this.y - 20,
+                target, dmg: this.dmg, def: { type: 'ranged' },
+                isP: this.isP, owner: this, active: true
+            });
+        }
     }
 
     draw(ctx) {
@@ -235,7 +269,7 @@ class Unit {
         this.rate = this.def.rate * rm;
         this.speed = this.def.speed * sm;
         this.range = this.def.range * (this.def.type === 'ranged' || this.def.type === 'aoe' || this.def.type === 'healer' ? gm : 1);
-        this.scale = key === 'giant' ? 3 : 2;
+        this.scale = unitScale(key);
 
         this.cd = Math.random() * 10;
         this.vx = 0; this.vy = 0;
@@ -318,11 +352,8 @@ class Unit {
                 this.y += Math.sin(a) * spd * dt;
             }
         } else {
-            // 目標が無い場合は敵陣側へ前進して待機する
-            const holdY = this.isP ? 100 : state.h - 100;
-            if(Math.abs(this.y - holdY) > 4) {
-                this.y += Math.sign(holdY - this.y) * spd * dt;
-            }
+            // 目標が無い場合（次のウェーブ待ちなど）は前進せずその場にとどまる。
+            // 敵がいないのに奥へ進み続けると不自然に見えるため。
         }
 
         // ユニット同士の押し合い
@@ -337,7 +368,12 @@ class Unit {
             }
         }
 
-        this.x = clamp(this.x, 14, state.w - 14);
+        // フィールドの左右は見えない壁として扱う。
+        // 単純な固定マージンだとゴーレムなど大きいスプライトが壁からはみ出すため、
+        // 実際のスプライト幅から必要な余白を計算し、壁に当たったら勢いを止める。
+        const wallMargin = Math.ceil(getSpriteBox(this.def.sprite).w * this.scale / 2) + 2;
+        if(this.x < wallMargin) { this.x = wallMargin; if(this.vx < 0) this.vx = 0; }
+        if(this.x > state.w - wallMargin) { this.x = state.w - wallMargin; if(this.vx > 0) this.vx = 0; }
         this.y = clamp(this.y, 24, state.h - 14);
     }
 
@@ -367,6 +403,22 @@ class Unit {
                 t.vx += Math.cos(a) * k;
                 t.vy += Math.sin(a) * k;
             }
+
+            // 薙ぎ払い（オークなど）: 主目標の周囲にいる敵にも波及ダメージ
+            if(this.def.meleeSplash) {
+                const splashDmg = this.dmg * (this.def.meleeSplashRate || 0.6);
+                state.units.forEach(u => {
+                    if(u === t || u.isP === this.isP || u.hp <= 0) return;
+                    if(dist(u, t) <= this.def.meleeSplash) u.takeDmg(splashDmg, this);
+                });
+                for(let i = 0; i < 6; i++) {
+                    const a2 = (Math.PI * 2 / 6) * i;
+                    state.fx.push({
+                        x: t.x + Math.cos(a2) * 10, y: t.y + Math.sin(a2) * 10,
+                        vx: Math.cos(a2) * 2, vy: Math.sin(a2) * 2, life: 14, color: '#a78bfa'
+                    });
+                }
+            }
         }
     }
 
@@ -377,8 +429,12 @@ class Unit {
         spawnPop(this.x, this.y - 22, Math.floor(v), '#ffffff');
 
         // 吸血（プレイヤー側の攻撃のみ）
-        if(attacker && attacker.isP && vampireRate() > 0 && attacker.hp !== undefined) {
+        if(attacker && attacker.isP && !attacker.isBase && vampireRate() > 0 && attacker.hp !== undefined) {
             attacker.hp = Math.min(attacker.max, attacker.hp + v * vampireRate());
+        }
+        // ユニット固有の吸血（リッチなど。陣営を問わず発動する個性の一つ）
+        if(attacker && attacker.def && attacker.def.lifesteal && attacker.hp !== undefined) {
+            attacker.hp = Math.min(attacker.max, attacker.hp + v * attacker.def.lifesteal);
         }
         // 反射装甲（プレイヤー側が受けたダメージのみ）
         if(attacker && this.isP && thornsRate() > 0 && attacker.takeDmg) {
@@ -516,7 +572,9 @@ class Boss {
 
         this.useSpecial();
 
-        this.x = clamp(this.x, 34, state.w - 34);
+        const wallMargin = Math.ceil(getSpriteBox(this.sprite).w * this.scale / 2) + 4;
+        if(this.x < wallMargin) { this.x = wallMargin; if(this.vx < 0) this.vx = 0; }
+        if(this.x > state.w - wallMargin) { this.x = state.w - wallMargin; if(this.vx > 0) this.vx = 0; }
         this.y = clamp(this.y, 60, state.h - 70);
     }
 
@@ -601,7 +659,7 @@ class Boss {
         this.flash = 6;
         spawnPop(this.x + randRange(-10, 10), this.y - 46, Math.floor(v), '#ffffff');
 
-        if(attacker && attacker.isP && vampireRate() > 0 && attacker.hp !== undefined) {
+        if(attacker && attacker.isP && !attacker.isBase && vampireRate() > 0 && attacker.hp !== undefined) {
             attacker.hp = Math.min(attacker.max, attacker.hp + v * vampireRate());
         }
 
@@ -886,6 +944,7 @@ function enterPrep() {
     state.scene = 'prep';
     state.selected = null;
     state.drag = null;
+    state.undoStack = [];
     state.boss = null;
     state.bossCleared = false;
     state.units = [];
@@ -939,6 +998,8 @@ function startBattle() {
     state.selected = null;
     state.drag = null;
     state.kills = 0;
+    state.enemySiege = false;
+    state.playerSiege = false;
     deployRoster();
     resetTactics();
 
@@ -950,6 +1011,8 @@ function startBattle() {
         }));
         state.spawnTimer = 0;
         state.bossDelay = -1;
+        // 最初の集団はバトル開始と同時に配置済みにする（唐突に湧いて見えないように）
+        if(state.spawnQueue.length > 0) spawnEnemyGroup(state.spawnQueue.shift());
     } else {
         state.spawnQueue = [];
     }
@@ -963,6 +1026,9 @@ function startBattle() {
 }
 
 // バトル終了 → 結果表示
+// VERSUS モードは体力バーが減る演出を見せてから結果画面を出す
+// （結果画面はフィールド全体を覆ってしまうため、先に演出を挟まないと
+//   体力が一瞬で減った瞬間が見えないまま隠れてしまう）
 function endBattle(win, reason) {
     if(state.scene !== 'battle') return;
     state.scene = 'result';
@@ -979,11 +1045,11 @@ function endBattle(win, reason) {
         // 負けた側が「勝った側の生き残りユニットのコスト合計」に応じたダメージを受ける
         const winnerValue = win ? tally.playerValue : tally.enemyValue;
         lifeDmg = clamp(Math.round(winnerValue * VERSUS_DMG_COEF), VERSUS_DMG_MIN, VERSUS_DMG_MAX);
-        if(win) state.aiLife = Math.max(0, state.aiLife - lifeDmg);
-        else    state.playerLife = Math.max(0, state.playerLife - lifeDmg);
+        const nextPlayerLife = win ? state.playerLife : Math.max(0, state.playerLife - lifeDmg);
+        const nextAiLife = win ? Math.max(0, state.aiLife - lifeDmg) : state.aiLife;
 
-        matchOver = (state.playerLife <= 0 || state.aiLife <= 0);
-        matchWin = (state.aiLife <= 0 && state.playerLife > 0);
+        matchOver = (nextPlayerLife <= 0 || nextAiLife <= 0);
+        matchWin = (nextAiLife <= 0 && nextPlayerLife > 0);
     }
 
     state.result = { win, reason, isFinalStory, isDraw, tally, lifeDmg, matchOver, matchWin };
@@ -1009,8 +1075,34 @@ function endBattle(win, reason) {
     }
 
     updateRecords();
-    updateVersusHud();
-    showResultScreen();
+
+    if(state.mode === 'versus' && !isDraw) {
+        playVersusLifeAnimation(win, lifeDmg, showResultScreen);
+    } else {
+        updateVersusHud();
+        showResultScreen();
+    }
+}
+
+// VERSUS の体力ゲージが減る演出。
+// 1) 減る前の体力をいったん表示 → 2) 一呼吸置いてから減らして CSS
+//    トランジションで滑らかに動かす → 3) 演出が終わってから結果画面を出す
+function playVersusLifeAnimation(win, lifeDmg, done) {
+    updateVersusHud(); // ダメージ適用前の体力をまず見せる
+
+    setTimeout(() => {
+        if(win) {
+            state.aiLife = Math.max(0, state.aiLife - lifeDmg);
+            spawnPop(state.enemyBase.x, state.enemyBase.y - 40, '-' + lifeDmg, '#ef4444');
+        } else {
+            state.playerLife = Math.max(0, state.playerLife - lifeDmg);
+            spawnPop(state.playerBase.x, state.playerBase.y - 40, '-' + lifeDmg, '#ef4444');
+        }
+        addShake(5);
+        updateVersusHud(); // ここで CSS の width トランジションが走る
+
+        setTimeout(done, 650);
+    }, 350);
 }
 
 function showResultScreen() {
@@ -1101,7 +1193,7 @@ function showResultScreen() {
         `<div class="result-row${x[2] ? ' ' + x[2] : ''}"><span>${x[0]}</span><span>${x[1]}</span></div>`).join('');
 
     btnNext.style.display = showNext ? '' : 'none';
-    btnNext.textContent = state.mode === 'story' ? 'ショップへ' : '次のラウンドへ';
+    btnNext.textContent = '次のラウンドへ';
     btnRetry.style.display = showRetry ? '' : 'none';
     btnRetry.textContent = (r.win || r.isDraw) ? 'このラウンドをやり直す' : 'もう一度挑戦する';
 
@@ -1171,7 +1263,6 @@ function renderRecords() {
 
     const survBest = Math.max(rec.survival.easy || 0, rec.survival.normal || 0, rec.survival.hard || 0);
     const vsWin = ['easy', 'normal', 'hard'].reduce((n, d) => n + (rec.versus[d].win || 0), 0);
-    const vsLose = ['easy', 'normal', 'hard'].reduce((n, d) => n + (rec.versus[d].lose || 0), 0);
 
     const storyText = rec.story.cleared
         ? `<span class="crown">★ 全クリア${rec.story.clearCount > 1 ? ' ×' + rec.story.clearCount : ''}</span>`
@@ -1181,7 +1272,7 @@ function renderRecords() {
         <div class="records-title">PLAY RECORD</div>
         <div class="rec-row"><span>STORY</span><span>${storyText}</span></div>
         <div class="rec-row"><span>SURVIVAL 最高</span><span>${survBest > 0 ? 'ROUND ' + survBest : '未プレイ'}</span></div>
-        <div class="rec-row"><span>VERSUS 戦績</span><span>${vsWin + vsLose > 0 ? vsWin + '勝 ' + vsLose + '敗' : '未プレイ'}</span></div>`;
+        <div class="rec-row"><span>VERSUS 戦績</span><span>${vsWin > 0 ? vsWin + '勝' : '未プレイ'}</span></div>`;
 
     // モード選択のバッジ
     const bs = document.getElementById('badge-story');
@@ -1237,6 +1328,7 @@ function retryRound() {
     // enterPrep で AI 編成を再抽選しないように、このラウンド分は購入済み扱いにする
     state.scene = 'prep';
     state.selected = null;
+    state.undoStack = [];
     state.units = [];
     state.projs = [];
     state.fx = [];
@@ -1346,6 +1438,7 @@ function loadGame() {
         // セーブ地点は準備フェーズの開始時。AI 編成は再抽選しない
         state.scene = 'prep';
         state.selected = null;
+        state.undoStack = [];
         state.units = [];
         state.projs = [];
         state.fx = [];
@@ -1408,10 +1501,10 @@ function renderShop() {
     legend.className = 'shop-legend';
 
     if(state.shopTab === 'units') {
-        legend.textContent = 'SPD は攻撃間隔（秒）。低いほど速い。タップで選択 → フィールドに配置。';
+        legend.textContent = '攻撃間隔は低いほど速い。タップで選択 → フィールドに配置。';
         list.appendChild(legend);
 
-        SHOP_UNITS.forEach(key => {
+        shopUnitsFor(state.mode).forEach(key => {
             const def = UNIT_DEFS[key];
             const owned = state.roster.filter(r => r.key === key).length;
             const card = document.createElement('div');
@@ -1438,12 +1531,12 @@ function renderShop() {
             const body = document.createElement('div');
             body.innerHTML = `
                 <div class="card-stats">
-                    <span><b>HP</b>${def.hp}</span>
-                    <span><b>ATK</b>${def.dmg < 0 ? '回復' + Math.abs(def.dmg) : def.dmg}</span>
-                    <span><b>SPD</b>${(def.rate / 60).toFixed(2)}s</span>
-                    <span><b>MOV</b>${Math.round(def.speed * 100)}</span>
-                    <span><b>RANGE</b>${def.range}</span>
-                    <span><b>TYPE</b>${TYPE_LABELS[def.type]}</span>
+                    <span><b>体力</b>${def.hp}</span>
+                    <span><b>攻撃力</b>${def.dmg < 0 ? '回復' + Math.abs(def.dmg) : def.dmg}</span>
+                    <span><b>攻撃間隔</b>${(def.rate / 60).toFixed(2)}秒</span>
+                    <span><b>移動速度</b>${Math.round(def.speed * 100)}</span>
+                    <span><b>射程</b>${def.range}</span>
+                    <span><b>種別</b>${TYPE_LABELS[def.type]}</span>
                 </div>
                 <div class="card-comment">${def.comment}</div>`;
 
@@ -1536,6 +1629,7 @@ function selectShopUnit(key) {
 function buyUpgrade(key) {
     const price = upgradePrice(key);
     if(state.gold < price) { toast('ゴールドが足りません'); return; }
+    pushUndo();
     state.gold -= price;
     state.upgrades[key] = upCount(key) + 1;
 
@@ -1553,6 +1647,7 @@ function buyTactic(key) {
     if(state.tactics[key]) { toast('すでに習得しています'); return; }
     const def = TACTIC_DEFS[key];
     if(state.gold < def.cost) { toast('ゴールドが足りません'); return; }
+    pushUndo();
     state.gold -= def.cost;
     state.tactics[key] = true;
     toast(`${def.name} を習得`);
@@ -1584,6 +1679,7 @@ function updatePrepUI() {
     });
 
     document.getElementById('btn-start-battle').disabled = state.roster.length === 0;
+    updateUndoButton();
 }
 
 function setTab(tab) {
@@ -1595,17 +1691,47 @@ function setTab(tab) {
     renderShop();
 }
 
-// 配置済みユニットを全て売却して予算に戻す
-function clearRoster() {
-    if(state.roster.length === 0) { toast('配置中のユニットはいません'); return; }
-    let refund = 0;
-    state.roster.forEach(r => { refund += UNIT_DEFS[r.key].cost; });
-    state.gold += refund;
-    state.roster = [];
+// ------------------------------------------------------------
+// アンドゥ（このラウンド中の購入・売却・強化・戦術習得を一手ずつ戻す）
+//
+// 「全解除」で編成を一括リセットできると、AI の対策編成（直前ラウンドの
+// プレイヤー編成を分析する仕組み）を無意味に潰せてしまうため廃止し、
+// 一手ずつしか戻せないアンドゥに置き換えている。連打すればラウンド開始
+// 時点まで戻せるが、その分の手間はかかる。
+// ------------------------------------------------------------
+function pushUndo() {
+    state.undoStack.push(JSON.stringify({
+        gold: state.gold,
+        roster: state.roster,
+        upgrades: state.upgrades,
+        tactics: state.tactics
+    }));
+    if(state.undoStack.length > 200) state.undoStack.shift(); // 念のため上限
+    updateUndoButton();
+}
+
+function undoLastAction() {
+    if(state.undoStack.length === 0) { toast('これ以上は戻せません'); return; }
+    const snap = JSON.parse(state.undoStack.pop());
+    state.gold = snap.gold;
+    state.roster = snap.roster;
+    state.upgrades = snap.upgrades;
+    state.tactics = snap.tactics;
     state.selected = null;
-    toast(`全ユニットを売却 (+${refund}G)`);
+
+    // 拠点強化(fortified)の反映数もアップグレード数に合わせて再計算する
+    state.playerBase.maxHp = BASE_HP + baseBonusHp();
+    state.playerBase.hp = Math.min(state.playerBase.hp, state.playerBase.maxHp);
+
+    toast('ひとつ前の状態に戻しました');
     renderShop();
+    updateUndoButton();
     saveGame();
+}
+
+function updateUndoButton() {
+    const btn = document.getElementById('btn-undo');
+    if(btn) btn.disabled = state.undoStack.length === 0;
 }
 
 // ============================================================
@@ -1644,6 +1770,7 @@ function onPointerDown(e) {
         const cap = maxUnitsFor(state.mode);
         if(state.roster.length >= cap) { toast(`配置できるのは ${cap} 体までです`); return; }
 
+        pushUndo();
         state.gold -= def.cost;
         state.roster.push({
             id: state.nextId++,
@@ -1683,6 +1810,7 @@ function onPointerUp() {
 
     if(!d.moved) {
         // タップした配置ユニットを売却して予算に戻す
+        pushUndo();
         const def = UNIT_DEFS[d.entry.key];
         state.roster = state.roster.filter(r => r !== d.entry);
         state.gold += def.cost;
@@ -1814,8 +1942,9 @@ function updateBattle(dt) {
     updateProjectiles(dt);
     updateFx(dt);
 
-    state.playerBase.update();
-    if(state.enemyBase) state.enemyBase.update();
+    state.playerBase.update(dt);
+    if(state.enemyBase) state.enemyBase.update(dt);
+    updateSiegeCollapse(dt);
 
     // 拠点の自動修復
     if(baseRegen() > 0) state.playerBase.heal(baseRegen() / 60 * dt);
@@ -1825,6 +1954,39 @@ function updateBattle(dt) {
 
     state.battleTimer -= dt;
     checkBattleEnd();
+}
+
+// 防衛ユニットが 1 体もいなくなった拠点は、そのまま守り切れないのが自明なので
+// 通常のちまちました削り合いを待たず一気に崩壊させる
+// （1 体だけ生き残った状態で拠点を延々つつく間延びを避けるため）。
+function updateSiegeCollapse(dt) {
+    if(!isVsMode()) return;
+
+    const enemyDefenders = state.units.some(u => !u.isP);
+    const playerDefenders = state.units.some(u => u.isP);
+    const collapseFrames = 90; // 約1.5秒で陥落する速度
+
+    if(!enemyDefenders && playerDefenders && state.enemyBase && state.enemyBase.hp > 0) {
+        if(!state.enemySiege) {
+            state.enemySiege = true;
+            spawnPop(state.enemyBase.x, state.enemyBase.y - 10, '防衛崩壊！', '#f87171');
+            addShake(4);
+        }
+        state.enemyBase.hp = Math.max(0, state.enemyBase.hp - (state.enemyBase.maxHp / collapseFrames) * dt);
+    } else if(enemyDefenders) {
+        state.enemySiege = false;
+    }
+
+    if(!playerDefenders && enemyDefenders && state.playerBase.hp > 0) {
+        if(!state.playerSiege) {
+            state.playerSiege = true;
+            spawnPop(state.playerBase.x, state.playerBase.y - 10, '防衛崩壊！', '#f87171');
+            addShake(4);
+        }
+        state.playerBase.hp = Math.max(0, state.playerBase.hp - (state.playerBase.maxHp / collapseFrames) * dt);
+    } else if(playerDefenders) {
+        state.playerSiege = false;
+    }
 }
 
 function checkBattleEnd() {
@@ -2111,7 +2273,7 @@ function drawRosterPreview() {
 
     all.forEach(({ r, isP }) => {
         const def = UNIT_DEFS[r.key];
-        const scale = r.key === 'giant' ? 3 : 2;
+        const scale = unitScale(r.key);
         const bounce = Math.abs(Math.sin(t + r.id)) * 2;
         drawShadow(ctx, def.sprite, r.x, r.y, scale, 0.35);
         ctx.strokeStyle = isP ? 'rgba(16,185,129,0.75)' : 'rgba(239,68,68,0.75)';
@@ -2200,7 +2362,7 @@ function drawTitleArt() {
 
     cast.forEach((key, i) => {
         const def = UNIT_DEFS[key];
-        const scale = key === 'giant' ? 3 : 2;
+        const scale = unitScale(key);
         const x = step * (i + 1);
         const y = h - 10;
         const bounce = Math.abs(Math.sin(t + i * 0.7)) * 3;
@@ -2289,7 +2451,7 @@ function bindEvents() {
     document.getElementById('tab-units').addEventListener('click', () => setTab('units'));
     document.getElementById('tab-upgrades').addEventListener('click', () => setTab('upgrades'));
     document.getElementById('tab-tactics').addEventListener('click', () => setTab('tactics'));
-    document.getElementById('btn-clear').addEventListener('click', clearRoster);
+    document.getElementById('btn-undo').addEventListener('click', undoLastAction);
     document.getElementById('btn-start-battle').addEventListener('click', startBattle);
 
     // 背景をタップしてシートを閉じる

@@ -250,6 +250,10 @@ body {
     cursor: pointer;
     flex: 0 0 auto;
 }
+.icon-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
 
 .battle-stats-inline {
     flex: 1 1 auto;
@@ -297,6 +301,7 @@ body {
 .sheet-backdrop.show { display: flex; }
 .sheet {
     width: 100%;
+    height: min(80vh, 640px);
     max-height: 88%;
     background: var(--panel);
     border-top: 1px solid var(--line);
@@ -426,7 +431,6 @@ body {
 
 .sheet-foot { display: flex; gap: 6px; padding-top: 8px; flex: 0 0 auto; }
 .sheet-foot .btn { flex: 1; padding: 12px; }
-.sheet-foot .btn.ghost { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
 
 /* あそびかたシートの本文 */
 .howto-body {
@@ -708,11 +712,11 @@ body {
 
         <div id="versus-hud">
             <div class="life-side">
-                <div class="life-label"><span>YOU</span><span id="life-p-val">100</span></div>
+                <div class="life-label"><span>自分</span><span id="life-p-val">100</span></div>
                 <div class="life-track"><div class="life-fill mine" id="life-p-fill" style="width:100%"></div></div>
             </div>
             <div class="life-side">
-                <div class="life-label"><span id="life-e-val">100</span><span>ENEMY</span></div>
+                <div class="life-label"><span id="life-e-val">100</span><span>相手</span></div>
                 <div class="life-track"><div class="life-fill foe" id="life-e-fill" style="width:100%"></div></div>
             </div>
         </div>
@@ -729,6 +733,7 @@ body {
                 <div class="gold-box"><span id="gold-val">0</span>G <small>予算</small></div>
                 <div class="deploy-box" id="deploy-box">配置 0/15</div>
             </div>
+            <button class="icon-btn" id="btn-undo" title="ひとつ戻す">↺</button>
             <button class="btn shop" id="btn-open-shop">ショップ</button>
             <button class="btn primary" id="btn-start-battle">バトル開始</button>
         </div>
@@ -766,7 +771,6 @@ body {
             </div>
             <div id="shop-list"></div>
             <div class="sheet-foot">
-                <button class="btn ghost" id="btn-clear">全解除</button>
                 <button class="btn primary" id="btn-sheet-done">配置にもどる</button>
             </div>
         </div>

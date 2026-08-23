@@ -338,13 +338,9 @@ function tintPalette(pal, targetHex, amount) {
     return pal.map(c => mixColor(c, targetHex, amount));
 }
 
-// 敵側ユニット用の赤系パレットを自動生成する。
-// プレイヤーも敵ユニット（goblin など）を購入できるため、
-// 全ユニットぶんの敵カラーを用意して陣営を一目で見分けられるようにする。
-const ENEMY_PALETTES = {};
-['knight', 'archer', 'wizard', 'healer', 'giant', 'goblin', 'orc', 'skeleton', 'angel'].forEach(k => {
-    ENEMY_PALETTES[k] = tintPalette(PALETTES[k], '#dc2626', 0.5);
-});
+// 敵側ユニット用の赤系パレットは game-data.js の末尾（UNIT_DEFS 定義後）で生成する
+// （エリートユニットがボス用パレットを流用しており、ユニットごとの実際の
+//   パレットを参照する必要があるため）。
 
 // ============================================================
 // スプライトの占有範囲（バウンディングボックス）キャッシュ
