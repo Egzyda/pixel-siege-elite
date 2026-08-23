@@ -25,61 +25,68 @@ const TYPE_LABELS = {
 const UNIT_DEFS = {
     // --- プレイヤーが購入できるユニット ---
     knight: {
-        name:'KNIGHT', cost:20, hp:240, dmg:24, range:26, speed:0.85, rate:45,
+        name:'KNIGHT', cost:20, hp:240, dmg:24, range:26, speed:0.80, rate:45,
         type:'melee', mass:1.4, kb:3, sprite:SPRITES.knight, pal:PALETTES.knight,
         comment:'重装甲の前衛。敵を力強く押し返す'
     },
     archer: {
-        name:'ARCHER', cost:30, hp:100, dmg:16, range:150, speed:0.75, rate:50,
+        name:'ARCHER', cost:30, hp:100, dmg:16, range:150, speed:0.50, rate:50,
         type:'ranged', mass:0.8, kb:1, sprite:SPRITES.archer, pal:PALETTES.archer,
         comment:'安全な距離から弓で攻撃する'
     },
     wizard: {
-        name:'MAGE', cost:55, hp:95, dmg:38, range:135, speed:0.6, rate:80,
+        name:'MAGE', cost:55, hp:95, dmg:38, range:135, speed:0.42, rate:80,
         type:'aoe', mass:0.7, kb:8, splash:46, sprite:SPRITES.wizard, pal:PALETTES.wizard,
         comment:'広範囲の魔法攻撃。群れに有効'
     },
     healer: {
-        name:'CLERIC', cost:45, hp:140, dmg:-22, range:115, speed:0.7, rate:55,
+        name:'CLERIC', cost:45, hp:140, dmg:-22, range:115, speed:0.50, rate:55,
         type:'healer', mass:0.8, kb:0.5, sprite:SPRITES.cleric, pal:PALETTES.healer,
         comment:'味方ユニットのHPを回復する'
     },
     giant: {
-        name:'GOLEM', cost:90, hp:1200, dmg:75, range:36, speed:0.35, rate:115,
+        name:'GOLEM', cost:90, hp:1200, dmg:75, range:36, speed:0.34, rate:115,
         type:'tank', mass:5.0, kb:30, sprite:SPRITES.giant, pal:PALETTES.giant,
         comment:'超高耐久の盾役。圧倒的な存在感'
     },
 
     // --- 敵ユニット（AI 対戦モードでは AI も購入する） ---
     goblin: {
-        name:'GOBLIN', cost:12, hp:70, dmg:12, range:22, speed:0.75, rate:48,
+        name:'GOBLIN', cost:12, hp:70, dmg:12, range:22, speed:0.72, rate:48,
         type:'melee', mass:0.6, kb:1, sprite:SPRITES.goblin, pal:PALETTES.goblin,
         comment:'数で押し寄せる小型の斥候'
     },
     orc: {
-        name:'ORC', cost:26, hp:150, dmg:24, range:26, speed:0.5, rate:58,
+        name:'ORC', cost:26, hp:150, dmg:24, range:26, speed:0.52, rate:58,
         type:'melee', mass:1.6, kb:3, sprite:SPRITES.orc, pal:PALETTES.orc,
         comment:'鈍重だが打撃力の高い戦士'
     },
     skeleton: {
-        name:'SKELETON', cost:18, hp:55, dmg:10, range:105, speed:0.6, rate:65,
+        name:'SKELETON', cost:18, hp:55, dmg:10, range:105, speed:0.40, rate:65,
         type:'ranged', mass:0.5, kb:1, sprite:SPRITES.skeleton, pal:PALETTES.skeleton,
         comment:'脆いが射程の長い不死の射手'
     },
 
     // --- 戦術で召喚される特殊ユニット（ショップには並ばない） ---
     angel: {
-        name:'ANGEL', cost:0, hp:900, dmg:70, range:130, speed:0.8, rate:40,
+        name:'ANGEL', cost:0, hp:900, dmg:70, range:130, speed:0.64, rate:40,
         type:'ranged', mass:2.0, kb:5, sprite:SPRITES.angel, pal:PALETTES.angel,
         comment:'戦術で召喚される守護天使'
     }
 };
 
 // ショップに並べるユニット（表示順）
-const SHOP_UNITS = ['knight', 'archer', 'wizard', 'healer', 'giant'];
+// ボス以外はプレイヤー・AI ともに全種類を購入できる
+const SHOP_UNITS = ['knight', 'archer', 'wizard', 'healer', 'giant', 'goblin', 'orc', 'skeleton'];
 
-// 同時に配置できるユニット数の上限（画面が埋まりすぎないための制限）
+// 同時に配置できるユニット数の上限（モード別）
+// SURVIVAL は「無制限」だが、描画・処理が破綻しないよう安全上限だけ設けている
 const MAX_UNITS = 15;
+const MAX_UNITS_SURVIVAL = 60;
+
+function maxUnitsFor(mode) {
+    return mode === 'survival' ? MAX_UNITS_SURVIVAL : MAX_UNITS;
+}
 
 // ============================================================
 // 予算テーブル（ラウンド開始時に配布されるゴールド）
@@ -142,37 +149,37 @@ const STORY_LAST_WAVE = 7;
 // ============================================================
 const BOSS_DEFS = {
     1: {
-        name:'Goblin Warchief', hp:500, dmg:22, speed:0.7, special:'summon',
+        name:'Goblin Warchief', hp:500, dmg:22, speed:0.56, special:'summon',
         palette:PALETTES.boss_goblin, sprite:SPRITES.boss_orc,
         summonType:'goblin', summonCount:2, summonInterval:300
     },
     2: {
-        name:'Stone Golem', hp:850, dmg:34, speed:0.4, special:'armor',
+        name:'Stone Golem', hp:850, dmg:34, speed:0.32, special:'armor',
         palette:PALETTES.boss_golem, sprite:SPRITES.giant,
         armorReduction:0.55 // 被ダメージを 55% に軽減
     },
     3: {
-        name:'Shadow Assassin', hp:1150, dmg:42, speed:1.1, special:'teleport',
+        name:'Shadow Assassin', hp:1150, dmg:42, speed:0.88, special:'teleport',
         palette:PALETTES.boss_assassin, sprite:SPRITES.boss_skeleton,
         teleportInterval:260
     },
     4: {
-        name:'Flame Drake', hp:2200, dmg:48, speed:0.6, special:'fire',
+        name:'Flame Drake', hp:2200, dmg:48, speed:0.48, special:'fire',
         palette:PALETTES.boss_drake, sprite:SPRITES.boss_dragon,
         fireInterval:170, fireDamage:38, fireRadius:100
     },
     5: {
-        name:'Necro Lord', hp:2900, dmg:52, speed:0.5, special:'revive',
+        name:'Necro Lord', hp:2900, dmg:52, speed:0.40, special:'revive',
         palette:PALETTES.boss_necro, sprite:SPRITES.boss_skeleton,
         reviveInterval:260, reviveCount:3
     },
     6: {
-        name:'Ancient Construct', hp:3800, dmg:76, speed:0.3, special:'laser',
+        name:'Ancient Construct', hp:3800, dmg:76, speed:0.24, special:'laser',
         palette:PALETTES.boss_construct, sprite:SPRITES.giant,
         laserInterval:250, laserDamage:120
     },
     7: {
-        name:'Chaos Titan', hp:6200, dmg:95, speed:0.45, special:'phases',
+        name:'Chaos Titan', hp:6200, dmg:95, speed:0.36, special:'phases',
         palette:PALETTES.boss_titan, sprite:SPRITES.boss_demon,
         phases: [
             { hpThreshold:1.0,  speedMult:1.0, damageMult:1.0 },
@@ -217,29 +224,88 @@ const TACTIC_DEFS = {
 //   budgetMult … AI に配られる予算の倍率
 //   pool       … 購入候補と抽選ウェイト
 // ============================================================
-// budgetMult … AI に配られる予算の倍率
-// powerStep  … ラウンドごとに AI ユニットが強くなる割合（プレイヤーの「強化」に相当）
+// budgetMult       … AI に配られる予算の倍率
+// powerStep        … ラウンドごとに AI ユニットが強くなる割合（プレイヤーの「強化」に相当）
+// counterStrength  … プレイヤー編成を見て対策する度合い（0 = 対策しない）
+// pool             … 購入候補と抽選ウェイト
 const AI_PRESETS = {
     easy: {
         label:'EASY', desc:'安くて数の多い編成',
-        budgetMult:1.5, powerStep:0.03,
+        budgetMult:1.5, powerStep:0.02, counterStrength:0,
         pool:[{key:'goblin', w:6}, {key:'orc', w:2}, {key:'skeleton', w:2}]
     },
     normal: {
-        label:'NORMAL', desc:'バランス型の編成',
-        budgetMult:1.15, powerStep:0.07,
-        pool:[{key:'knight', w:3}, {key:'archer', w:3}, {key:'orc', w:2}, {key:'skeleton', w:2}]
+        label:'NORMAL', desc:'バランス型。こちらの編成も見てくる',
+        budgetMult:1.05, powerStep:0.04, counterStrength:0.45,
+        pool:[{key:'knight', w:3}, {key:'archer', w:3}, {key:'orc', w:2},
+              {key:'skeleton', w:2}, {key:'goblin', w:2}, {key:'wizard', w:1}]
     },
     hard: {
-        label:'HARD', desc:'高コスト特化の編成',
-        budgetMult:1.25, powerStep:0.09,
-        pool:[{key:'wizard', w:3}, {key:'giant', w:2}, {key:'knight', w:2}, {key:'archer', w:2}]
+        label:'HARD', desc:'高コスト特化。徹底的に対策してくる',
+        budgetMult:1.25, powerStep:0.06, counterStrength:1.0,
+        pool:[{key:'wizard', w:3}, {key:'giant', w:2}, {key:'knight', w:2},
+              {key:'archer', w:2}, {key:'healer', w:1}, {key:'orc', w:1}]
     }
 };
 
-// AI が余らせた予算を編成強化に変換する単位（このゴールドごとに +6%）
-const AI_POWER_UNIT = 60;
-const AI_POWER_GAIN = 1.06;
+// ============================================================
+// AI の対策編成ルール（2 ラウンド目以降に適用）
+// 直前のラウンド終了時点のプレイヤー編成を分析し、刺さるユニットの
+// 抽選ウェイトを引き上げる。note は準備フェーズのヒント表示に使う。
+// ============================================================
+const AI_COUNTER_RULES = [
+    {
+        when: c => c.swarmRatio >= 0.5 && c.count >= 5,
+        boost: { wizard: 2.4, orc: 1.4 },
+        note: '物量編成には範囲攻撃で対抗してきた'
+    },
+    {
+        when: c => c.tankRatio >= 0.22,
+        boost: { knight: 1.9, goblin: 1.6 },
+        note: '重装編成には手数で対抗してきた'
+    },
+    {
+        when: c => c.rangedRatio >= 0.45,
+        boost: { goblin: 2.1, knight: 1.7 },
+        note: '遠距離編成には突撃役を増やしてきた'
+    },
+    {
+        when: c => c.meleeRatio >= 0.55,
+        boost: { archer: 2.0, skeleton: 1.8 },
+        note: '近接編成には射撃で対抗してきた'
+    },
+    {
+        when: c => c.hasHealer,
+        boost: { wizard: 1.8, archer: 1.3 },
+        note: '回復役を火力で押し切る編成にしてきた'
+    }
+];
+
+// AI が余らせた予算を編成強化に変換する設定
+// 掛け算で積むと指数的に膨れ上がるため、加算 + 上限で頭打ちにする
+const AI_POWER_UNIT = 60;     // このゴールドごとに
+const AI_POWER_GAIN = 0.04;   // +4%（加算）
+const AI_POWER_MAX = {        // モード別の上限倍率
+    versus: 1.7,              // 対戦は互角に近い勝負にする
+    survival: 99              // サバイバルは上限なし（いずれ必ず押し負ける）
+};
+
+// ============================================================
+// VS 対戦モード（決着がつく対戦）
+// 拠点 HP とは別に「プレイヤー体力」を持ち、ラウンドに負けた側が
+// 勝った側の生き残りユニットのコスト合計に応じたダメージを受ける。
+// ============================================================
+const VERSUS_LIFE = 100;        // 初期体力
+const VERSUS_DMG_COEF = 0.18;   // 生存ユニットのコスト合計に掛ける係数
+const VERSUS_DMG_MIN = 8;       // 最低ダメージ
+const VERSUS_DMG_MAX = 30;      // 最大ダメージ（1ラウンドで決着しすぎないように）
+
+// ラウンドごとの制限時間（フレーム）
+const BATTLE_TIME = {
+    story: 180 * 60,
+    survival: 120 * 60,
+    versus: 120 * 60
+};
 
 // 拠点の基本ステータス
 const BASE_HP = 1500;      // 拠点の最大HP

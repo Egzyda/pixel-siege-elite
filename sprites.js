@@ -338,9 +338,11 @@ function tintPalette(pal, targetHex, amount) {
     return pal.map(c => mixColor(c, targetHex, amount));
 }
 
-// AI 対戦モードで敵側が使用するユニット用の赤系パレットを自動生成する
+// 敵側ユニット用の赤系パレットを自動生成する。
+// プレイヤーも敵ユニット（goblin など）を購入できるため、
+// 全ユニットぶんの敵カラーを用意して陣営を一目で見分けられるようにする。
 const ENEMY_PALETTES = {};
-['knight', 'archer', 'wizard', 'healer', 'giant'].forEach(k => {
+['knight', 'archer', 'wizard', 'healer', 'giant', 'goblin', 'orc', 'skeleton', 'angel'].forEach(k => {
     ENEMY_PALETTES[k] = tintPalette(PALETTES[k], '#dc2626', 0.5);
 });
 

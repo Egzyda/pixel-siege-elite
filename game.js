@@ -7,7 +7,8 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
-const SAVE_KEY = 'pixelSiegeElite_v2';
+const SAVE_KEY = 'pixelSiegeElite_v3';
+const RECORDS_KEY = 'pixelSiegeElite_records_v1';
 
 // ============================================================
 // ゲーム状態
@@ -15,7 +16,7 @@ const SAVE_KEY = 'pixelSiegeElite_v2';
 const state = {
     w: 0, h: 0,               // フィールドの論理サイズ（CSS ピクセル）
     scene: 'title',           // title / mode / prep / battle / result
-    mode: 'story',            // story（ステージ） / battle（AI 対戦）
+    mode: 'story',            // story（ステージ） / survival（無限） / versus（体力制対戦）
     difficulty: 'normal',     // AI 対戦モードの難易度
     round: 1,                 // ウェーブ番号 / ラウンド番号
     gold: 0,                  // 残予算
@@ -47,12 +48,21 @@ const state = {
 
     battleTimer: 0,           // 残り時間（フレーム）
     speed: 1,                 // 観戦速度倍率
+    paused: false,            // バトルの一時停止
     timeWarp: 0,              // タイムワープ残り（フレーム）
     shake: 0,
     kills: 0,
     snapshot: null,           // ラウンド開始時の状態（やり直し用）
-    result: null              // 直前のバトル結果
+    result: null,             // 直前のバトル結果
+
+    playerLife: 0,            // VERSUS モードのプレイヤー体力
+    aiLife: 0,                // VERSUS モードの AI 体力
+    aiNote: '',               // AI がどう対策してきたかのヒント文
+    records: null             // プレイ記録（localStorage に永続化）
 };
+
+// AI と戦うモードかどうか（敵拠点と AI 編成が存在する）
+const isVsMode = () => state.mode === 'survival' || state.mode === 'versus';
 
 // ============================================================
 // ユーティリティ
@@ -77,6 +87,8 @@ let toastTimer = null;
 function toast(msg) {
     const el = document.getElementById('toast');
     el.textContent = msg;
+    // ボトムシートが開いているときは、シートに隠れない上部に表示する
+    el.classList.toggle('high', !!document.querySelector('.sheet-backdrop.show'));
     el.classList.add('show');
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => el.classList.remove('show'), 1600);
@@ -99,7 +111,7 @@ const vampireRate = () => Math.min(0.5, 0.10 * upCount('vampire'));
 // AI 対戦モードで敵ユニットに掛かる強化倍率
 // （ラウンド進行によるスケーリング + AI が余剰予算を注ぎ込んだ分）
 function enemyPowerMult() {
-    if(state.mode !== 'battle') return 1;
+    if(!isVsMode()) return 1;
     const p = AI_PRESETS[state.difficulty];
     return (state.aiPower || 1) * (1 + p.powerStep * (state.round - 1));
 }
@@ -112,12 +124,18 @@ function upgradePrice(key) {
 // ============================================================
 // フィールドのレイアウト計算
 // ============================================================
+// VERSUS モードは画面上部に体力ゲージを表示するため、その高さぶん敵陣を下げる
+function topInset() {
+    return state.mode === 'versus' ? 34 : 0;
+}
+
 function layout() {
+    const top = topInset();
     return {
-        deployTop: state.h * 0.55,        // プレイヤーが配置できる上端
-        deployBottom: state.h - 54,       // プレイヤーが配置できる下端（拠点の手前）
-        enemyTop: 112,                    // 敵の出現エリア上端
-        enemyBottom: state.h * 0.34       // 敵の出現エリア下端
+        deployTop: state.h * 0.55,           // プレイヤーが配置できる上端
+        deployBottom: state.h - 54,          // プレイヤーが配置できる下端（拠点の手前）
+        enemyTop: 112 + top,                 // 敵の出現エリア上端
+        enemyBottom: state.h * 0.34 + top    // 敵の出現エリア下端
     };
 }
 
@@ -141,7 +159,7 @@ class Base {
 
     reposition() {
         this.x = state.w / 2;
-        this.y = this.isP ? state.h - 22 : 72;
+        this.y = this.isP ? state.h - 22 : 72 + topInset();
     }
 
     takeDmg(v, attacker) {
@@ -429,7 +447,7 @@ class Boss {
         this.speed = this.data.speed;
         this.special = this.data.special;
         this.x = state.w / 2;
-        this.y = 130;
+        this.y = 130 + topInset();
         this.vx = 0; this.vy = 0;
         this.cd = 0;
         this.flash = 0;
@@ -639,6 +657,7 @@ function updateTactics(dt) {
 function fireTactic(key) {
     const def = TACTIC_DEFS[key];
     spawnPop(state.w / 2, state.h * 0.42, def.name, '#fde68a');
+    flashTacticChip(key);
 
     switch(key) {
         case 'meteor':
@@ -686,40 +705,133 @@ function deployRoster() {
 }
 
 // 生き残ったユニットだけを編成に残す
-function syncRosterAfterBattle() {
+// バトル結果の集計。
+// ユニットは戦死しても編成からは失われず、次ラウンドは HP 全回復で再配置される
+// （毎ラウンド同じ予算をもらう AI との資金差が開きすぎないようにするため）。
+function collectBattleResult() {
     const alive = new Set(state.units.filter(u => u.hp > 0).map(u => u.rid));
-    state.roster = state.roster.filter(r => alive.has(r.id));
-    state.aiRoster = state.aiRoster.filter(r => alive.has(r.id));
+    const valueOf = roster => roster.reduce(
+        (sum, r) => alive.has(r.id) ? sum + UNIT_DEFS[r.key].cost : sum, 0);
+    return {
+        playerAlive: state.roster.filter(r => alive.has(r.id)).length,
+        enemyAlive: state.aiRoster.filter(r => alive.has(r.id)).length,
+        playerValue: valueOf(state.roster),
+        enemyValue: valueOf(state.aiRoster),
+        playerLost: state.roster.filter(r => !alive.has(r.id)).length
+    };
 }
 
-// AI の編成を組む（難易度プリセットに従って予算内で購入する）
+// ------------------------------------------------------------
+// プレイヤー編成の傾向を分析する（AI の対策編成に使う）
+// ------------------------------------------------------------
+function analyzeRoster(roster) {
+    const c = {
+        count: roster.length,
+        meleeRatio: 0, rangedRatio: 0, tankRatio: 0, swarmRatio: 0,
+        hasHealer: false, rangedX: null
+    };
+    if(roster.length === 0) return c;
+
+    let melee = 0, ranged = 0, tank = 0, swarm = 0;
+    let rxSum = 0, rxCount = 0;
+
+    roster.forEach(r => {
+        const def = UNIT_DEFS[r.key];
+        if(def.type === 'melee') melee++;
+        if(def.type === 'tank') tank++;
+        if(def.type === 'ranged' || def.type === 'aoe') {
+            ranged++;
+            rxSum += r.x; rxCount++;
+        }
+        if(def.type === 'healer') c.hasHealer = true;
+        if(def.hp <= 110) swarm++; // 低 HP の数押しユニット
+    });
+
+    c.meleeRatio = melee / roster.length;
+    c.rangedRatio = ranged / roster.length;
+    c.tankRatio = tank / roster.length;
+    c.swarmRatio = swarm / roster.length;
+    if(rxCount > 0) c.rangedX = rxSum / rxCount; // 遠距離ユニットの重心
+    return c;
+}
+
+// プレイヤー編成に刺さるようウェイトを補正したプールを返す
+function counteredPool(preset, roster) {
+    const base = preset.pool.map(p => ({ key: p.key, w: p.w }));
+    const strength = preset.counterStrength || 0;
+
+    // 1 ラウンド目や EASY は対策しない
+    if(strength <= 0 || roster.length === 0) {
+        state.aiNote = '';
+        return base;
+    }
+
+    const comp = analyzeRoster(roster);
+    const notes = [];
+    const boosts = {};
+
+    AI_COUNTER_RULES.forEach(rule => {
+        if(!rule.when(comp)) return;
+        notes.push(rule.note);
+        Object.keys(rule.boost).forEach(k => {
+            // strength が小さいほど補正が穏やかになる
+            const mult = 1 + (rule.boost[k] - 1) * strength;
+            boosts[k] = (boosts[k] || 1) * mult;
+        });
+    });
+
+    state.aiNote = notes.length ? notes[0] : '';
+
+    // プールに無いユニットも、対策対象なら候補に加える
+    Object.keys(boosts).forEach(k => {
+        if(!base.some(p => p.key === k)) base.push({ key: k, w: 0.6 });
+    });
+    return base.map(p => ({ key: p.key, w: p.w * (boosts[p.key] || 1) }));
+}
+
+// AI の編成を組む（難易度プリセット + プレイヤー編成への対策）
 function buildAiRoster() {
     const preset = AI_PRESETS[state.difficulty];
     // 序盤にいきなり差がつかないよう、予算補正は数ラウンドかけて効いてくる
     const ramp = 1 + (preset.budgetMult - 1) * Math.min(1, state.round / 3);
     state.aiGold += Math.round(budgetForRound(state.round) * ramp);
 
+    // 2 ラウンド目以降は直前のプレイヤー編成を見て刺さるユニットを選ぶ
+    const pool = counteredPool(preset, state.round > 1 ? state.roster : []);
+    const comp = analyzeRoster(state.roster);
+
     const lay = layout();
-    let guard = 200;
-    while(guard-- > 0 && state.aiRoster.length < MAX_UNITS) {
-        const affordable = preset.pool.filter(p => UNIT_DEFS[p.key].cost <= state.aiGold);
+    const cap = maxUnitsFor(state.mode);
+    let guard = 400;
+    while(guard-- > 0 && state.aiRoster.length < cap) {
+        const affordable = pool.filter(p => UNIT_DEFS[p.key].cost <= state.aiGold);
         if(affordable.length === 0) break;
 
         // ウェイト付き抽選
-        const total = affordable.reduce((s, p) => s + p.w, 0);
+        const total = affordable.reduce((sum, p) => sum + p.w, 0);
         let r = Math.random() * total;
         let pick = affordable[affordable.length - 1];
         for(const p of affordable) { r -= p.w; if(r <= 0) { pick = p; break; } }
 
         state.aiGold -= UNIT_DEFS[pick.key].cost;
+
         // 近接・タンクは前列、遠距離・回復は後列に配置する
         const t = UNIT_DEFS[pick.key].type;
         const isFront = (t === 'melee' || t === 'tank');
         const band = lay.enemyBottom - lay.enemyTop;
+
+        // 前衛はプレイヤーの遠距離ユニットが固まっている側へ寄せる
+        let x;
+        if(isFront && comp.rangedX !== null && Math.random() < 0.7) {
+            x = clamp(comp.rangedX + randRange(-45, 45), 28, state.w - 28);
+        } else {
+            x = randRange(28, state.w - 28);
+        }
+
         state.aiRoster.push({
             id: state.nextId++,
             key: pick.key,
-            x: randRange(28, state.w - 28),
+            x: x,
             y: isFront
                 ? randRange(lay.enemyTop + band * 0.55, lay.enemyBottom)
                 : randRange(lay.enemyTop, lay.enemyTop + band * 0.45)
@@ -727,9 +839,10 @@ function buildAiRoster() {
     }
 
     // 配置上限に達して予算が余った場合は編成強化に回す（プレイヤーの「強化」に相当）
-    while(state.aiGold >= AI_POWER_UNIT) {
+    const powerMax = AI_POWER_MAX[state.mode] || 2.0;
+    while(state.aiGold >= AI_POWER_UNIT && state.aiPower < powerMax) {
         state.aiGold -= AI_POWER_UNIT;
-        state.aiPower = (state.aiPower || 1) * AI_POWER_GAIN;
+        state.aiPower = Math.min(powerMax, state.aiPower + AI_POWER_GAIN);
     }
 }
 
@@ -749,6 +862,18 @@ function clampRosters() {
 // ============================================================
 // シーン制御
 // ============================================================
+// 下部バーの表示切り替え
+function showPrepBar() {
+    document.getElementById('prep-bar').style.display = 'flex';
+    document.getElementById('battle-bar').style.display = 'none';
+    document.getElementById('tactic-hud').classList.remove('show');
+}
+
+function showBattleBar() {
+    document.getElementById('prep-bar').style.display = 'none';
+    document.getElementById('battle-bar').style.display = 'flex';
+}
+
 function showScreen(id) {
     ['screen-title', 'screen-mode', 'screen-result'].forEach(s => {
         document.getElementById(s).classList.toggle('show', s === id);
@@ -773,27 +898,34 @@ function enterPrep() {
 
     // 拠点は毎ラウンド全回復した状態で始まる
     state.playerBase = new Base(true);
-    state.enemyBase = (state.mode === 'battle') ? new Base(false) : null;
+    state.enemyBase = isVsMode() ? new Base(false) : null;
 
-    if(state.mode === 'battle') buildAiRoster();
+    if(isVsMode()) buildAiRoster();
     clampRosters();
 
     // やり直し用のスナップショットを保存
     state.snapshot = JSON.stringify({
         round: state.round, gold: state.gold,
         roster: state.roster, aiRoster: state.aiRoster, aiGold: state.aiGold,
-        aiPower: state.aiPower,
+        aiPower: state.aiPower, playerLife: state.playerLife, aiLife: state.aiLife,
         upgrades: state.upgrades, tactics: state.tactics, nextId: state.nextId
     });
 
     hideScreens();
-    document.getElementById('prep-panel').style.display = '';
-    document.getElementById('battle-panel').style.display = 'none';
+    closePauseModal();
+    closeShop();
+    showPrepBar();
     resize();
     renderShop();
     updatePrepUI();
     updateHud();
+    updateVersusHud();
     saveGame();
+
+    // AI がこちらの編成に対策してきた場合はヒントを出す
+    if(isVsMode() && state.round > 1 && state.aiNote) {
+        setTimeout(() => toast('敵の動き: ' + state.aiNote), 350);
+    }
 }
 
 // バトルフェーズへ
@@ -818,14 +950,13 @@ function startBattle() {
         }));
         state.spawnTimer = 0;
         state.bossDelay = -1;
-        state.battleTimer = 150 * 60;
     } else {
         state.spawnQueue = [];
-        state.battleTimer = 90 * 60;
     }
+    state.battleTimer = BATTLE_TIME[state.mode] || 120 * 60;
+    state.paused = false;
 
-    document.getElementById('prep-panel').style.display = 'none';
-    document.getElementById('battle-panel').style.display = 'flex';
+    showBattleBar();
     resize();
     setSpeed(1);
     updateHud();
@@ -835,21 +966,50 @@ function startBattle() {
 function endBattle(win, reason) {
     if(state.scene !== 'battle') return;
     state.scene = 'result';
-    syncRosterAfterBattle();
+    state.paused = false;
+    closePauseModal();
 
-    const isFinalStory = (state.mode === 'story' && win && state.round >= STORY_LAST_WAVE);
-    state.result = { win, reason, isFinalStory };
+    const tally = collectBattleResult();
+    const isDraw = (win === null);
+    const isFinalStory = (state.mode === 'story' && win === true && state.round >= STORY_LAST_WAVE);
 
-    // 勝利時は次ラウンドの予算を配布する
-    if(win) {
+    let lifeDmg = 0, matchOver = false, matchWin = false;
+
+    if(state.mode === 'versus' && !isDraw) {
+        // 負けた側が「勝った側の生き残りユニットのコスト合計」に応じたダメージを受ける
+        const winnerValue = win ? tally.playerValue : tally.enemyValue;
+        lifeDmg = clamp(Math.round(winnerValue * VERSUS_DMG_COEF), VERSUS_DMG_MIN, VERSUS_DMG_MAX);
+        if(win) state.aiLife = Math.max(0, state.aiLife - lifeDmg);
+        else    state.playerLife = Math.max(0, state.playerLife - lifeDmg);
+
+        matchOver = (state.playerLife <= 0 || state.aiLife <= 0);
+        matchWin = (state.aiLife <= 0 && state.playerLife > 0);
+    }
+
+    state.result = { win, reason, isFinalStory, isDraw, tally, lifeDmg, matchOver, matchWin };
+
+    // 次ラウンドの予算を配布
+    // （VERSUS はラウンドに負けても、体力が残っていれば試合は続く）
+    if(state.mode === 'versus') {
+        if(!matchOver) {
+            state.round++;
+            state.gold += budgetForRound(state.round);
+        } else {
+            deleteSave();
+        }
+    } else if(win || isDraw) {
         if(isFinalStory) {
             deleteSave();
         } else {
             state.round++;
             state.gold += budgetForRound(state.round);
         }
+    } else if(state.mode === 'survival') {
+        deleteSave(); // サバイバルは敗北で終了
     }
 
+    updateRecords();
+    updateVersusHud();
     showResultScreen();
 }
 
@@ -861,42 +1021,201 @@ function showResultScreen() {
     const btnNext = document.getElementById('btn-result-next');
     const btnRetry = document.getElementById('btn-result-retry');
 
-    const survivors = state.roster.length;
     const baseRatio = Math.round((state.playerBase.hp / state.playerBase.maxHp) * 100);
+    const rows = [];
+    let showNext = false, showRetry = true;
 
-    if(r.isFinalStory) {
-        title.textContent = 'ALL CLEAR';
-        title.className = 'result-title win';
-        msg.textContent = '全7ステージ制覇！ 見事な采配だ。';
-    } else if(r.win) {
-        title.textContent = 'VICTORY';
-        title.className = 'result-title win';
-        msg.textContent = state.mode === 'story'
-            ? `WAVE ${state.round - 1} クリア！`
-            : `ROUND ${state.round - 1} 勝利！`;
+    if(state.mode === 'versus') {
+        // --- VERSUS: 体力制の対戦 ---
+        if(r.matchOver) {
+            title.textContent = r.matchWin ? 'YOU WIN' : 'YOU LOSE';
+            title.className = 'result-title ' + (r.matchWin ? 'win' : 'lose');
+            msg.textContent = r.matchWin
+                ? `${state.round} ラウンドで相手の体力を削り切った！`
+                : `${state.round} ラウンドで力尽きた…`;
+            showNext = false;
+            showRetry = false;
+        } else if(r.isDraw) {
+            title.textContent = 'DRAW';
+            title.className = 'result-title';
+            msg.textContent = '互角 — どちらの体力も減らなかった';
+            showNext = true;
+        } else {
+            title.textContent = r.win ? 'ROUND WIN' : 'ROUND LOSE';
+            title.className = 'result-title ' + (r.win ? 'win' : 'lose');
+            msg.textContent = r.win
+                ? '相手の体力を削った！'
+                : (r.reason || '拠点を落とされた');
+            showNext = true;
+        }
+        if(!r.isDraw) rows.push([r.win ? '相手に与えたダメージ' : '受けたダメージ', `${r.lifeDmg}`, 'dmg']);
+        rows.push(['自分の体力', `${state.playerLife}`]);
+        rows.push(['相手の体力', `${state.aiLife}`]);
+        rows.push(['生き残り', `味方 ${r.tally.playerAlive} / 敵 ${r.tally.enemyAlive}`]);
+
+    } else if(state.mode === 'survival') {
+        // --- SURVIVAL: 負けたら終了 ---
+        if(r.win || r.isDraw) {
+            title.textContent = 'SURVIVED';
+            title.className = 'result-title win';
+            msg.textContent = `ラウンド ${state.round - 1} を突破！`;
+            showNext = true;
+        } else {
+            title.textContent = 'GAME OVER';
+            title.className = 'result-title lose';
+            msg.textContent = `ラウンド ${state.round} で力尽きた（${r.reason || '敗北'}）`;
+        }
+        rows.push(['到達ラウンド', `${r.win ? state.round - 1 : state.round}`]);
+        rows.push(['撃破数', `${state.kills}`]);
+        rows.push(['戦力', `${state.roster.length} 体`]);
+        rows.push(['拠点HP', `${baseRatio}%`]);
+
     } else {
-        title.textContent = 'DEFEAT';
-        title.className = 'result-title lose';
-        msg.textContent = r.reason || '拠点が破壊された';
+        // --- STORY ---
+        if(r.isFinalStory) {
+            title.textContent = 'ALL CLEAR';
+            title.className = 'result-title win';
+            msg.textContent = '全7ステージ制覇！ 見事な采配だ。';
+            showRetry = false;
+        } else if(r.win || r.isDraw) {
+            title.textContent = r.isDraw ? 'DRAW' : 'VICTORY';
+            title.className = 'result-title win';
+            msg.textContent = `WAVE ${state.round - 1} クリア！`;
+            showNext = true;
+        } else {
+            title.textContent = 'DEFEAT';
+            title.className = 'result-title lose';
+            msg.textContent = r.reason || '拠点が破壊された';
+        }
+        rows.push(['撃破数', `${state.kills}`]);
+        rows.push(['生き残り', `${r.tally.playerAlive} / ${state.roster.length} 体`]);
+        rows.push(['拠点HP', `${baseRatio}%`]);
     }
 
-    const rows = [
-        ['撃破数', `${state.kills}`],
-        ['生き残り', `${survivors} 体`],
-        ['拠点HP', `${baseRatio}%`]
-    ];
-    if(r.win && !r.isFinalStory) rows.push(['次の予算', `${state.gold}G`]);
+    if(showNext) rows.push(['次の予算', `${state.gold}G`]);
+    if(r.tally.playerLost > 0) {
+        rows.push(['戦死したユニット', `${r.tally.playerLost} 体（編成には残ります）`]);
+    }
+
     stats.innerHTML = rows.map(x =>
-        `<div class="result-row"><span>${x[0]}</span><span>${x[1]}</span></div>`).join('');
+        `<div class="result-row${x[2] ? ' ' + x[2] : ''}"><span>${x[0]}</span><span>${x[1]}</span></div>`).join('');
 
-    btnNext.style.display = (r.win && !r.isFinalStory) ? '' : 'none';
+    btnNext.style.display = showNext ? '' : 'none';
     btnNext.textContent = state.mode === 'story' ? 'ショップへ' : '次のラウンドへ';
-    btnRetry.style.display = r.isFinalStory ? 'none' : '';
-    btnRetry.textContent = r.win ? 'このラウンドをやり直す' : 'もう一度挑戦する';
+    btnRetry.style.display = showRetry ? '' : 'none';
+    btnRetry.textContent = (r.win || r.isDraw) ? 'このラウンドをやり直す' : 'もう一度挑戦する';
 
-    document.getElementById('prep-panel').style.display = 'none';
-    document.getElementById('battle-panel').style.display = 'none';
+    document.getElementById('prep-bar').style.display = 'none';
+    document.getElementById('battle-bar').style.display = 'none';
     showScreen('screen-result');
+}
+
+// ============================================================
+// プレイ記録（localStorage に永続化）
+// ============================================================
+function defaultRecords() {
+    return {
+        story: { cleared: false, bestWave: 0, clearCount: 0 },
+        survival: { easy: 0, normal: 0, hard: 0 },
+        versus: { easy: { win: 0, lose: 0 }, normal: { win: 0, lose: 0 }, hard: { win: 0, lose: 0 } }
+    };
+}
+
+function loadRecords() {
+    try {
+        const raw = localStorage.getItem(RECORDS_KEY);
+        const base = defaultRecords();
+        if(!raw) return base;
+        const saved = JSON.parse(raw);
+        return {
+            story: Object.assign(base.story, saved.story || {}),
+            survival: Object.assign(base.survival, saved.survival || {}),
+            versus: Object.assign(base.versus, saved.versus || {})
+        };
+    } catch(e) {
+        return defaultRecords();
+    }
+}
+
+function saveRecords() {
+    try { localStorage.setItem(RECORDS_KEY, JSON.stringify(state.records)); } catch(e) { /* 無視 */ }
+}
+
+// バトル結果を記録に反映する
+function updateRecords() {
+    const rec = state.records;
+    const r = state.result;
+    if(!rec || !r) return;
+
+    if(state.mode === 'story') {
+        const reached = r.win ? state.round : state.round;
+        rec.story.bestWave = Math.max(rec.story.bestWave, Math.min(STORY_LAST_WAVE, reached));
+        if(r.isFinalStory) {
+            rec.story.cleared = true;
+            rec.story.clearCount++;
+        }
+    } else if(state.mode === 'survival') {
+        const reached = state.round - 1;
+        rec.survival[state.difficulty] = Math.max(rec.survival[state.difficulty] || 0, Math.max(0, reached));
+    } else if(state.mode === 'versus' && r.matchOver) {
+        const v = rec.versus[state.difficulty];
+        if(r.matchWin) v.win++; else v.lose++;
+    }
+    saveRecords();
+}
+
+// タイトル画面の記録パネルとモード選択のバッジを描画する
+function renderRecords() {
+    const rec = state.records || defaultRecords();
+    const panel = document.getElementById('records-panel');
+
+    const survBest = Math.max(rec.survival.easy || 0, rec.survival.normal || 0, rec.survival.hard || 0);
+    const vsWin = ['easy', 'normal', 'hard'].reduce((n, d) => n + (rec.versus[d].win || 0), 0);
+    const vsLose = ['easy', 'normal', 'hard'].reduce((n, d) => n + (rec.versus[d].lose || 0), 0);
+
+    const storyText = rec.story.cleared
+        ? `<span class="crown">★ 全クリア${rec.story.clearCount > 1 ? ' ×' + rec.story.clearCount : ''}</span>`
+        : (rec.story.bestWave > 0 ? `WAVE ${rec.story.bestWave} 到達` : '未プレイ');
+
+    panel.innerHTML = `
+        <div class="records-title">PLAY RECORD</div>
+        <div class="rec-row"><span>STORY</span><span>${storyText}</span></div>
+        <div class="rec-row"><span>SURVIVAL 最高</span><span>${survBest > 0 ? 'ROUND ' + survBest : '未プレイ'}</span></div>
+        <div class="rec-row"><span>VERSUS 戦績</span><span>${vsWin + vsLose > 0 ? vsWin + '勝 ' + vsLose + '敗' : '未プレイ'}</span></div>`;
+
+    // モード選択のバッジ
+    const bs = document.getElementById('badge-story');
+    if(bs) bs.innerHTML = rec.story.cleared ? '★ CLEAR' : (rec.story.bestWave ? 'W' + rec.story.bestWave : '');
+    const bv = document.getElementById('badge-survival');
+    if(bv) bv.textContent = survBest > 0 ? 'BEST R' + survBest : '';
+    const bt = document.getElementById('badge-versus');
+    if(bt) bt.textContent = vsWin > 0 ? vsWin + ' WIN' : '';
+
+    // 難易度ボタンのクリアマーク
+    ['easy', 'normal', 'hard'].forEach(d => {
+        const el = document.getElementById('diff-mark-' + d);
+        if(!el) return;
+        const marks = [];
+        if(rec.versus[d].win > 0) marks.push('★' + rec.versus[d].win);
+        if(rec.survival[d] > 0) marks.push('R' + rec.survival[d]);
+        el.textContent = marks.join(' ');
+    });
+}
+
+// ============================================================
+// VERSUS モードの体力ゲージ表示
+// ============================================================
+function updateVersusHud() {
+    const hud = document.getElementById('versus-hud');
+    if(state.mode !== 'versus' || state.scene === 'title' || state.scene === 'mode') {
+        hud.classList.remove('show');
+        return;
+    }
+    hud.classList.add('show');
+    document.getElementById('life-p-val').textContent = state.playerLife;
+    document.getElementById('life-e-val').textContent = state.aiLife;
+    document.getElementById('life-p-fill').style.width = (state.playerLife / VERSUS_LIFE * 100) + '%';
+    document.getElementById('life-e-fill').style.width = (state.aiLife / VERSUS_LIFE * 100) + '%';
 }
 
 // ラウンドをやり直す（準備フェーズ開始時の状態に戻す）
@@ -909,6 +1228,8 @@ function retryRound() {
     state.aiRoster = s.aiRoster;
     state.aiGold = s.aiGold;
     state.aiPower = s.aiPower || 1;
+    state.playerLife = s.playerLife;
+    state.aiLife = s.aiLife;
     state.upgrades = s.upgrades;
     state.tactics = s.tactics;
     state.nextId = s.nextId;
@@ -925,16 +1246,18 @@ function retryRound() {
     state.timeWarp = 0;
     state.kills = 0;
     state.playerBase = new Base(true);
-    state.enemyBase = (state.mode === 'battle') ? new Base(false) : null;
+    state.enemyBase = isVsMode() ? new Base(false) : null;
     clampRosters();
 
     hideScreens();
-    document.getElementById('prep-panel').style.display = '';
-    document.getElementById('battle-panel').style.display = 'none';
+    closePauseModal();
+    closeShop();
+    showPrepBar();
     resize();
     renderShop();
     updatePrepUI();
     updateHud();
+    updateVersusHud();
 }
 
 // 新規ゲーム開始
@@ -946,24 +1269,35 @@ function startNewGame(mode) {
     state.aiRoster = [];
     state.aiGold = 0;
     state.aiPower = 1;
+    state.aiNote = '';
     state.nextId = 1;
     state.upgrades = {};
     state.tactics = {};
+    state.playerLife = VERSUS_LIFE;
+    state.aiLife = VERSUS_LIFE;
     deleteSave();
     enterPrep();
-    toast(mode === 'story' ? 'STORY モード開始' : `AI 対戦（${AI_PRESETS[state.difficulty].label}）開始`);
+
+    const diff = AI_PRESETS[state.difficulty].label;
+    if(mode === 'story') toast('STORY モード開始');
+    else if(mode === 'survival') toast(`SURVIVAL 開始（${diff}）— 配置上限なし`);
+    else toast(`VERSUS 開始（${diff}）— 体力 ${VERSUS_LIFE}`);
 }
 
 function backToTitle() {
     state.scene = 'title';
+    state.paused = false;
     state.units = [];
     state.projs = [];
     state.fx = [];
     state.popups = [];
     state.boss = null;
-    document.getElementById('prep-panel').style.display = '';
-    document.getElementById('battle-panel').style.display = 'none';
+    closePauseModal();
+    closeShop();
+    showPrepBar();
+    updateVersusHud();
     document.getElementById('btn-continue').style.display = hasSave() ? '' : 'none';
+    renderRecords();
     showScreen('screen-title');
 }
 
@@ -976,7 +1310,7 @@ function saveGame() {
             mode: state.mode, difficulty: state.difficulty,
             round: state.round, gold: state.gold,
             roster: state.roster, aiRoster: state.aiRoster, aiGold: state.aiGold,
-            aiPower: state.aiPower,
+            aiPower: state.aiPower, playerLife: state.playerLife, aiLife: state.aiLife,
             upgrades: state.upgrades, tactics: state.tactics, nextId: state.nextId
         }));
     } catch(e) { /* 保存できない環境では何もしない */ }
@@ -1003,6 +1337,8 @@ function loadGame() {
         state.aiRoster = s.aiRoster || [];
         state.aiGold = s.aiGold || 0;
         state.aiPower = s.aiPower || 1;
+        state.playerLife = s.playerLife === undefined ? VERSUS_LIFE : s.playerLife;
+        state.aiLife = s.aiLife === undefined ? VERSUS_LIFE : s.aiLife;
         state.upgrades = s.upgrades || {};
         state.tactics = s.tactics || {};
         state.nextId = s.nextId || 1;
@@ -1017,7 +1353,7 @@ function loadGame() {
         state.boss = null;
         state.bossCleared = false;
         state.playerBase = new Base(true);
-        state.enemyBase = (state.mode === 'battle') ? new Base(false) : null;
+        state.enemyBase = isVsMode() ? new Base(false) : null;
         clampRosters();
 
         state.snapshot = JSON.stringify({
@@ -1027,11 +1363,11 @@ function loadGame() {
         });
 
         hideScreens();
-        document.getElementById('prep-panel').style.display = '';
-        document.getElementById('battle-panel').style.display = 'none';
+        showPrepBar();
         renderShop();
         updatePrepUI();
         updateHud();
+        updateVersusHud();
         toast('つづきから再開しました');
     } catch(e) {
         toast('セーブデータを読み込めませんでした');
@@ -1066,48 +1402,58 @@ function unitIconCanvas(key) {
 function renderShop() {
     const list = document.getElementById('shop-list');
     list.innerHTML = '';
+    list.classList.toggle('single-col', state.shopTab !== 'units');
+
+    const legend = document.createElement('div');
+    legend.className = 'shop-legend';
 
     if(state.shopTab === 'units') {
-        const legend = document.createElement('div');
-        legend.className = 'shop-legend';
-        legend.textContent = 'ATK SPD は攻撃間隔（秒）。低いほど速い。';
+        legend.textContent = 'SPD は攻撃間隔（秒）。低いほど速い。タップで選択 → フィールドに配置。';
         list.appendChild(legend);
 
         SHOP_UNITS.forEach(key => {
             const def = UNIT_DEFS[key];
+            const owned = state.roster.filter(r => r.key === key).length;
             const card = document.createElement('div');
             card.className = 'shop-card';
             card.dataset.key = key;
 
-            const owned = state.roster.filter(r => r.key === key).length;
-            const main = document.createElement('div');
-            main.className = 'card-main';
-            main.innerHTML = `
-                <div class="card-top">
-                    <span class="card-name">${def.name}</span>
+            const head = document.createElement('div');
+            head.className = 'card-head';
+            head.appendChild(unitIconCanvas(key));
+            const id = document.createElement('div');
+            id.className = 'card-id';
+            id.innerHTML = `
+                <div class="card-name">${def.name}</div>
+                <div class="card-sub">
                     <span class="card-type">${TYPE_LABELS[def.type]}</span>
                     ${owned ? `<span class="card-own">×${owned}</span>` : ''}
-                    <span class="card-cost">${def.cost}G</span>
-                </div>
+                </div>`;
+            head.appendChild(id);
+            const cost = document.createElement('div');
+            cost.className = 'card-cost';
+            cost.textContent = def.cost + 'G';
+            head.appendChild(cost);
+
+            const body = document.createElement('div');
+            body.innerHTML = `
                 <div class="card-stats">
                     <span><b>HP</b>${def.hp}</span>
                     <span><b>ATK</b>${def.dmg < 0 ? '回復' + Math.abs(def.dmg) : def.dmg}</span>
-                    <span><b>ATK SPD</b>${(def.rate / 60).toFixed(2)}s</span>
+                    <span><b>SPD</b>${(def.rate / 60).toFixed(2)}s</span>
                     <span><b>MOV</b>${Math.round(def.speed * 100)}</span>
                     <span><b>RANGE</b>${def.range}</span>
                     <span><b>TYPE</b>${TYPE_LABELS[def.type]}</span>
                 </div>
                 <div class="card-comment">${def.comment}</div>`;
 
-            card.appendChild(unitIconCanvas(key));
-            card.appendChild(main);
+            card.appendChild(head);
+            card.appendChild(body);
             card.addEventListener('click', () => selectShopUnit(key));
             list.appendChild(card);
         });
 
     } else if(state.shopTab === 'upgrades') {
-        const legend = document.createElement('div');
-        legend.className = 'shop-legend';
         legend.textContent = '強化は永続効果。購入するたびに価格が上がります。';
         list.appendChild(legend);
 
@@ -1119,42 +1465,40 @@ function renderShop() {
             card.className = 'shop-card';
             card.dataset.upgrade = key;
             card.innerHTML = `
-                <div class="card-emoji">${def.icon}</div>
-                <div class="card-main">
-                    <div class="card-top">
-                        <span class="card-name">${def.name}</span>
-                        ${owned ? `<span class="card-own">Lv.${owned}</span>` : ''}
-                        <span class="card-cost">${price}G</span>
+                <div class="card-head">
+                    <div class="card-emoji">${def.icon}</div>
+                    <div class="card-id">
+                        <div class="card-name">${def.name}</div>
+                        <div class="card-sub">${owned ? `<span class="card-own">Lv.${owned}</span>` : '<span class="card-type">永続</span>'}</div>
                     </div>
-                    <div class="card-comment">${def.desc}</div>
-                </div>`;
+                    <div class="card-cost">${price}G</div>
+                </div>
+                <div class="card-comment" style="margin-top:4px">${def.desc}</div>`;
             card.addEventListener('click', () => buyUpgrade(key));
             list.appendChild(card);
         });
 
     } else {
-        const legend = document.createElement('div');
-        legend.className = 'shop-legend';
-        legend.textContent = 'バトル中は操作できないため、戦術は自動で発動します。';
+        legend.textContent = 'バトル中は操作できないため、戦術はクールダウンごとに自動発動します。';
         list.appendChild(legend);
 
         Object.keys(TACTIC_DEFS).forEach(key => {
             const def = TACTIC_DEFS[key];
             const owned = !!state.tactics[key];
             const card = document.createElement('div');
-            card.className = 'shop-card';
+            card.className = 'shop-card' + (owned ? ' owned-tactic' : '');
             card.dataset.tactic = key;
             card.innerHTML = `
-                <div class="card-emoji">${def.icon}</div>
-                <div class="card-main">
-                    <div class="card-top">
-                        <span class="card-name">${def.name}</span>
-                        ${owned ? '<span class="card-own">習得済み</span>' : ''}
-                        <span class="card-cost">${owned ? '—' : def.cost + 'G'}</span>
+                <div class="card-head">
+                    <div class="card-emoji">${def.icon}</div>
+                    <div class="card-id">
+                        <div class="card-name">${def.name}</div>
+                        <div class="card-sub">${owned ? '<span class="card-own">習得済み</span>' : `<span class="card-type">CD ${def.cd}秒</span>`}</div>
                     </div>
-                    <div class="card-comment">${def.desc}</div>
-                    <div class="card-note">クールダウン ${def.cd}秒ごとに自動発動</div>
-                </div>`;
+                    <div class="card-cost">${owned ? '—' : def.cost + 'G'}</div>
+                </div>
+                <div class="card-comment" style="margin-top:4px">${def.desc}</div>
+                <div class="card-note">クールダウンごとに自動発動</div>`;
             card.addEventListener('click', () => buyTactic(key));
             list.appendChild(card);
         });
@@ -1163,12 +1507,29 @@ function renderShop() {
     updatePrepUI();
 }
 
+// ------------------------------------------------------------
+// ショップ（ボトムシート）の開閉
+// ------------------------------------------------------------
+function openShop() {
+    if(state.scene !== 'prep') return;
+    renderShop();
+    document.getElementById('shop-sheet').classList.add('show');
+}
+
+function closeShop() {
+    document.getElementById('shop-sheet').classList.remove('show');
+}
+
 function selectShopUnit(key) {
     const def = UNIT_DEFS[key];
-    if(state.roster.length >= MAX_UNITS) { toast(`配置できるのは ${MAX_UNITS} 体までです`); return; }
+    const cap = maxUnitsFor(state.mode);
+    if(state.roster.length >= cap) { toast(`配置できるのは ${cap} 体までです`); return; }
     if(state.gold < def.cost) { toast('ゴールドが足りません'); return; }
     state.selected = (state.selected === key) ? null : key;
-    if(state.selected) toast(`${def.name} を配置エリアにタップで配置`);
+    if(state.selected) {
+        closeShop();
+        toast(`${def.name} を選択中 — 緑のエリアをタップして配置`);
+    }
     updatePrepUI();
 }
 
@@ -1200,16 +1561,20 @@ function buyTactic(key) {
 }
 
 function updatePrepUI() {
+    const cap = maxUnitsFor(state.mode);
     document.getElementById('gold-val').textContent = state.gold;
+    document.getElementById('sheet-gold').textContent = state.gold;
     const dep = document.getElementById('deploy-box');
-    dep.textContent = `配置 ${state.roster.length}/${MAX_UNITS}`;
-    dep.classList.toggle('full', state.roster.length >= MAX_UNITS);
+    dep.textContent = state.mode === 'survival'
+        ? `配置 ${state.roster.length}体（上限なし）`
+        : `配置 ${state.roster.length}/${cap}`;
+    dep.classList.toggle('full', state.roster.length >= cap);
 
     document.querySelectorAll('#shop-list .shop-card').forEach(card => {
         const key = card.dataset.key;
         if(key) {
             card.classList.toggle('selected', state.selected === key);
-            card.classList.toggle('cant-buy', state.gold < UNIT_DEFS[key].cost || state.roster.length >= MAX_UNITS);
+            card.classList.toggle('cant-buy', state.gold < UNIT_DEFS[key].cost || state.roster.length >= cap);
         } else if(card.dataset.upgrade) {
             card.classList.toggle('cant-buy', state.gold < upgradePrice(card.dataset.upgrade));
         } else if(card.dataset.tactic) {
@@ -1276,7 +1641,8 @@ function onPointerDown(e) {
             return;
         }
         if(state.gold < def.cost) { toast('ゴールドが足りません'); state.selected = null; updatePrepUI(); return; }
-        if(state.roster.length >= MAX_UNITS) { toast(`配置できるのは ${MAX_UNITS} 体までです`); return; }
+        const cap = maxUnitsFor(state.mode);
+        if(state.roster.length >= cap) { toast(`配置できるのは ${cap} 体までです`); return; }
 
         state.gold -= def.cost;
         state.roster.push({
@@ -1470,15 +1836,37 @@ function checkBattleEnd() {
         if(state.bossCleared) { endBattle(true); return; }
         if(state.battleTimer <= 0) { endBattle(false, '制限時間内に討伐できなかった'); return; }
     } else {
+        if(!state.enemyBase) return;
         if(state.enemyBase.hp <= 0) { endBattle(true); return; }
         if(state.battleTimer <= 0) {
-            const mine = state.playerBase.hp / state.playerBase.maxHp;
-            const foe = state.enemyBase.hp / state.enemyBase.maxHp;
-            if(mine > foe) endBattle(true);
-            else endBattle(false, '時間切れ（拠点HPで判定負け）');
+            judgeTimeout();
             return;
         }
     }
+}
+
+// 時間切れの判定
+// 1) 拠点 HP の割合が高いほうが勝ち
+// 2) 同率なら生き残った戦力（コスト合計）が多いほうが勝ち
+// 3) それも同じなら引き分け
+function judgeTimeout() {
+    const mine = state.playerBase.hp / state.playerBase.maxHp;
+    const foe = state.enemyBase.hp / state.enemyBase.maxHp;
+
+    if(Math.abs(mine - foe) > 0.001) {
+        if(mine > foe) endBattle(true, '時間切れ（拠点HP判定で勝利）');
+        else endBattle(false, '時間切れ（拠点HP判定で敗北）');
+        return;
+    }
+
+    const tally = collectBattleResult();
+    if(tally.playerValue !== tally.enemyValue) {
+        const win = tally.playerValue > tally.enemyValue;
+        endBattle(win, win ? '時間切れ（残存戦力で勝利）' : '時間切れ（残存戦力で敗北）');
+        return;
+    }
+
+    endBattle(null, '時間切れ（引き分け）');
 }
 
 // ============================================================
@@ -1489,10 +1877,13 @@ function updateHud() {
     const boss = document.getElementById('hud-boss');
     const right = document.getElementById('hud-right');
 
+    const diff = AI_PRESETS[state.difficulty].label;
     if(state.mode === 'story') {
         left.textContent = `STORY  WAVE ${state.round}/${STORY_LAST_WAVE}`;
+    } else if(state.mode === 'survival') {
+        left.textContent = `SURVIVAL  R${state.round}  ${diff}`;
     } else {
-        left.textContent = `BATTLE  ROUND ${state.round}  ${AI_PRESETS[state.difficulty].label}`;
+        left.textContent = `VERSUS  R${state.round}  ${diff}`;
     }
 
     if(state.boss) {
@@ -1517,33 +1908,48 @@ function updateBattlePanel() {
     document.getElementById('bs-enemies').textContent = foe;
     document.getElementById('bs-kills').textContent = state.kills;
     document.getElementById('bs-time').textContent = Math.max(0, Math.ceil(state.battleTimer / 60)) + 's';
+    updateTacticHud();
+}
 
-    // 戦術のクールダウン表示
-    const box = document.getElementById('tactic-status');
+// 戦術のクールダウンをフィールド左下にチップで表示する
+function updateTacticHud() {
+    const box = document.getElementById('tactic-hud');
     const keys = Object.keys(state.tactics);
-    if(keys.length === 0) {
-        if(!box.dataset.empty) {
-            box.dataset.empty = '1';
-            box.innerHTML = '<div class="tactic-empty">戦術は未習得です。準備フェーズのショップ「戦術」タブで購入すると、バトル中に自動発動します。</div>';
-        }
+
+    if(keys.length === 0 || state.scene !== 'battle') {
+        box.classList.remove('show');
         return;
     }
-    if(box.dataset.empty || box.children.length !== keys.length) {
-        delete box.dataset.empty;
+    box.classList.add('show');
+
+    if(box.children.length !== keys.length) {
         box.innerHTML = keys.map(k => `
-            <div class="tactic-row" data-t="${k}">
-                <span class="t-icon">${TACTIC_DEFS[k].icon}</span>
-                <span>${TACTIC_DEFS[k].name}</span>
+            <div class="t-chip" data-t="${k}">
+                <span class="t-ico">${TACTIC_DEFS[k].icon}</span>
                 <span class="t-bar"><span class="t-fill"></span></span>
+                <span class="t-sec">--</span>
             </div>`).join('');
     }
+
     keys.forEach(k => {
-        const row = box.querySelector(`.tactic-row[data-t="${k}"] .t-fill`);
-        if(!row) return;
+        const chip = box.querySelector(`.t-chip[data-t="${k}"]`);
+        if(!chip) return;
         const total = TACTIC_DEFS[k].cd * 60;
         const left = Math.max(0, state.tacticTimers[k] || 0);
-        row.style.width = Math.round((1 - left / total) * 100) + '%';
+        const sec = Math.ceil(left / 60);
+        chip.querySelector('.t-fill').style.width = Math.round((1 - left / total) * 100) + '%';
+        chip.querySelector('.t-sec').textContent = sec <= 0 ? 'NOW' : sec + 's';
+        chip.classList.toggle('ready', left <= total * 0.12);
     });
+}
+
+// 戦術が発動したときにチップを光らせる
+function flashTacticChip(key) {
+    const chip = document.querySelector(`#tactic-hud .t-chip[data-t="${key}"]`);
+    if(!chip) return;
+    chip.classList.remove('fired');
+    void chip.offsetWidth; // アニメーションを再生させるための再描画
+    chip.classList.add('fired');
 }
 
 function setSpeed(v) {
@@ -1728,12 +2134,88 @@ function drawRosterPreview() {
 }
 
 // ============================================================
+// 一時停止
+// ============================================================
+function openPauseModal() {
+    if(state.scene !== 'battle') return;
+    state.paused = true;
+    document.getElementById('pause-modal').classList.add('show');
+}
+
+function closePauseModal() {
+    document.getElementById('pause-modal').classList.remove('show');
+}
+
+function resumeBattle() {
+    state.paused = false;
+    closePauseModal();
+}
+
+// ============================================================
+// あそびかた
+// ============================================================
+function openHowto() { document.getElementById('howto-sheet').classList.add('show'); }
+function closeHowto() { document.getElementById('howto-sheet').classList.remove('show'); }
+
+// ============================================================
+// 最新版へ更新（Service Worker のキャッシュを破棄して読み込み直す）
+// ============================================================
+async function forceUpdate() {
+    toast('最新版を確認しています…');
+    try {
+        if(window.caches) {
+            const keys = await caches.keys();
+            await Promise.all(keys.map(k => caches.delete(k)));
+        }
+        if('serviceWorker' in navigator) {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(regs.map(r => r.unregister()));
+        }
+    } catch(e) {
+        // キャッシュ操作に失敗しても読み込み直しは行う
+    }
+    // クエリを付けて確実にサーバから取り直す
+    location.replace(location.pathname + '?u=' + Date.now());
+}
+
+// ============================================================
+// タイトル画面のドット絵アート（プレイヤーユニットを並べて表示）
+// ============================================================
+function drawTitleArt() {
+    const c = document.getElementById('title-art');
+    if(!c) return;
+    const rect = c.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    const w = Math.max(200, Math.round(rect.width));
+    const h = Math.round(rect.height) || 96;
+    c.width = Math.round(w * dpr);
+    c.height = Math.round(h * dpr);
+    const g = c.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+
+    const cast = ['giant', 'knight', 'archer', 'wizard', 'healer'];
+    const t = performance.now() / 400;
+    const step = w / (cast.length + 1);
+
+    cast.forEach((key, i) => {
+        const def = UNIT_DEFS[key];
+        const scale = key === 'giant' ? 3 : 2;
+        const x = step * (i + 1);
+        const y = h - 10;
+        const bounce = Math.abs(Math.sin(t + i * 0.7)) * 3;
+        drawShadow(g, def.sprite, x, y, scale, 0.3);
+        drawSprite(g, def.sprite, def.pal, x, y - bounce, scale, {});
+    });
+}
+
+// ============================================================
 // メインループ
 // ============================================================
 let hudTick = 0;
 
 function loop() {
-    if(state.scene === 'battle') {
+    if(state.scene === 'battle' && !state.paused) {
         for(let i = 0; i < state.speed; i++) {
             if(state.scene !== 'battle') break;
             updateBattle(1);
@@ -1743,6 +2225,7 @@ function loop() {
         updateFx(1);
     }
 
+    if(state.scene === 'title') drawTitleArt();
     draw();
     requestAnimationFrame(loop);
 }
@@ -1776,12 +2259,20 @@ function bindEvents() {
     canvas.addEventListener('contextmenu', e => e.preventDefault());
 
     // タイトル
-    document.getElementById('btn-newgame').addEventListener('click', () => showScreen('screen-mode'));
+    document.getElementById('btn-newgame').addEventListener('click', () => {
+        renderRecords();
+        showScreen('screen-mode');
+    });
     document.getElementById('btn-continue').addEventListener('click', loadGame);
+    document.getElementById('btn-howto').addEventListener('click', openHowto);
+    document.getElementById('btn-close-howto').addEventListener('click', closeHowto);
+    document.getElementById('btn-howto-done').addEventListener('click', closeHowto);
+    document.getElementById('btn-update').addEventListener('click', forceUpdate);
 
     // モード選択
     document.getElementById('btn-mode-story').addEventListener('click', () => startNewGame('story'));
-    document.getElementById('btn-mode-battle').addEventListener('click', () => startNewGame('battle'));
+    document.getElementById('btn-mode-survival').addEventListener('click', () => startNewGame('survival'));
+    document.getElementById('btn-mode-versus').addEventListener('click', () => startNewGame('versus'));
     document.getElementById('btn-mode-back').addEventListener('click', backToTitle);
     document.querySelectorAll('.diff-btn').forEach(b => {
         b.addEventListener('click', () => {
@@ -1791,14 +2282,33 @@ function bindEvents() {
         });
     });
 
-    // 準備フェーズ
+    // 準備フェーズ（ショップはボトムシート）
+    document.getElementById('btn-open-shop').addEventListener('click', openShop);
+    document.getElementById('btn-close-shop').addEventListener('click', closeShop);
+    document.getElementById('btn-sheet-done').addEventListener('click', closeShop);
     document.getElementById('tab-units').addEventListener('click', () => setTab('units'));
     document.getElementById('tab-upgrades').addEventListener('click', () => setTab('upgrades'));
     document.getElementById('tab-tactics').addEventListener('click', () => setTab('tactics'));
     document.getElementById('btn-clear').addEventListener('click', clearRoster);
     document.getElementById('btn-start-battle').addEventListener('click', startBattle);
 
-    // バトル速度
+    // 背景をタップしてシートを閉じる
+    document.getElementById('shop-sheet').addEventListener('click', e => {
+        if(e.target.id === 'shop-sheet') closeShop();
+    });
+    document.getElementById('howto-sheet').addEventListener('click', e => {
+        if(e.target.id === 'howto-sheet') closeHowto();
+    });
+
+    // バトル中
+    document.getElementById('btn-pause').addEventListener('click', openPauseModal);
+    document.getElementById('btn-resume').addEventListener('click', resumeBattle);
+    document.getElementById('btn-pause-retry').addEventListener('click', () => {
+        closePauseModal();
+        state.paused = false;
+        retryRound();
+    });
+    document.getElementById('btn-pause-title').addEventListener('click', backToTitle);
     document.querySelectorAll('.speed-btn').forEach(b => {
         b.addEventListener('click', () => setSpeed(Number(b.dataset.speed)));
     });
@@ -1810,8 +2320,10 @@ function bindEvents() {
 }
 
 function init() {
+    state.records = loadRecords();
     resize();
     bindEvents();
+    renderRecords();
     document.getElementById('btn-continue').style.display = hasSave() ? '' : 'none';
     showScreen('screen-title');
     requestAnimationFrame(loop);
