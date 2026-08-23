@@ -1,431 +1,620 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Pixel Siege: Elite</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        :root {
-            --safe-top: env(safe-area-inset-top);
-            --safe-bottom: env(safe-area-inset-bottom);
-            --bg-dark: #0f172a;
-            --panel-bg: rgba(30, 41, 59, 0.95);
-            --accent: #f59e0b;
-            --danger: #ef4444;
-            --success: #10b981;
-            --mana: #3b82f6;
-        }
-        html, body {
-            height: 100%;
-            margin: 0;
-            padding: 0;
-            background-color: var(--bg-dark);
-        }
-        body {
-            color: white;
-            font-family: 'Futura', 'Helvetica Neue', sans-serif;
-            overflow: hidden;
-            touch-action: none;
-            user-select: none;
-            -webkit-user-select: none;
-            height: 100dvh;
-        }
-        .game-wrapper {
-            position: absolute;
-            top: 0; left: 0;
-            width: 100%;
-            height: 100%;
-            display: flex;
-            flex-direction: column;
-            padding-top: var(--safe-top);
-        }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Pixel Siege: Elite</title>
+<meta name="theme-color" content="#0f172a">
+<meta name="description" content="スマホ縦画面向けのカジュアルオートバトラー。ユニットを購入・配置して全自動バトルで拠点を守れ。">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+/* ============================================================
+   基本設定 — 縦長レイアウトを中央に固定し、PC でも同じ見た目にする
+   ============================================================ */
+:root {
+    --bg:        #0f172a;
+    --panel:     #1e293b;
+    --panel2:    #334155;
+    --line:      rgba(148,163,184,0.25);
+    --text:      #e2e8f0;
+    --muted:     #94a3b8;
+    --gold:      #fbbf24;
+    --accent:    #f59e0b;
+    --green:     #10b981;
+    --red:       #ef4444;
+    --purple:    #a78bfa;
+    --safe-top:    env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
 
-        .canvas-container {
-            flex-grow: 1;
-            position: relative;
-            background: #1e293b;
-            overflow: hidden;
-            box-shadow: inset 0 0 50px rgba(0,0,0,0.5);
-        }
-        canvas {
-            display: block;
-            width: 100%;
-            height: 100%;
-            image-rendering: pixelated;
-        }
+* { box-sizing: border-box; }
 
-        .hud-top {
-            position: absolute;
-            top: 0; left: 0; right: 0;
-            padding: 10px 16px;
-            background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent);
-            pointer-events: none;
-            z-index: 10;
-        }
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #000;
+}
 
-        .bars-wrapper {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 20px;
-            margin-bottom: 0px;
-        }
-        .hp-group {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-        }
-        .hp-label {
-            font-size: 10px;
-            font-weight: 900;
-            letter-spacing: 1px;
-            margin-bottom: 0px;
-            text-shadow: 0 1px 2px black;
-        }
-        .bar-track {
-            height: 12px;
-            background: rgba(0,0,0,0.6);
-            border: 1px solid rgba(255,255,255,0.1);
-            border-radius: 6px;
-            overflow: hidden;
-            position: relative;
-        }
-        .bar-fill {
-            height: 100%;
-            transition: width 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-            position: relative;
-        }
-        .bar-fill::after {
-            content: ''; position: absolute; top:0; left:0; right:0; height: 50%;
-            background: rgba(255,255,255,0.2);
-        }
+body {
+    color: var(--text);
+    font-family: 'Futura', 'Helvetica Neue', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', sans-serif;
+    overflow: hidden;
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    height: 100dvh;
+    display: flex;
+    justify-content: center;
+}
 
-        .boss-hp-container {
-            margin-bottom: 10px;
-            display: none;
-        }
-        .boss-hp-container.active {
-            display: block;
-        }
+/* ゲーム本体（最大 390px の縦長エリア。左右は黒のレターボックス） */
+#app {
+    position: relative;
+    width: 100%;
+    max-width: 390px;
+    height: 100%;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 0 40px rgba(0,0,0,0.8);
+}
 
-        .control-panel {
-            background: var(--panel-bg);
-            border-top: 1px solid rgba(255,255,255,0.1);
-            padding: 4px 10px var(--safe-bottom, 4px) 10px;
-            display: grid;
-            grid-template-columns: 1fr auto;
-            gap: 4px;
-            backdrop-filter: blur(10px);
-            z-index: 20;
-        }
+/* ============================================================
+   フィールド（キャンバス）
+   ============================================================ */
+#stage {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+    background: #1e293b;
+}
 
-        .deck-scroller {
-            display: grid;
-            grid-template-columns: repeat(5, 1fr);
-            gap: 6px;
-        }
-        .unit-card {
-            background: #334155;
-            border-radius: 8px;
-            position: relative;
-            aspect-ratio: 0.75;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            border: 2px solid transparent;
-            transition: all 0.1s;
-            min-width: 0;
-        }
-        .unit-card.active {
-            background: #475569;
-            border-color: var(--accent);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
-        }
-        .unit-card.disabled {
-            opacity: 0.4;
-            filter: grayscale(1);
-        }
-        .unit-card.locked {
-            opacity: 0.2;
-            filter: grayscale(1);
-            pointer-events: none;
-        }
-        .unit-cost {
-            position: absolute;
-            top: -6px; right: -6px;
-            background: #0f172a;
-            border: 1px solid #475569;
-            color: var(--mana);
-            font-size: 10px;
-            font-weight: bold;
-            width: 18px; height: 18px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 2;
-        }
-        .unit-icon {
-            width: 24px; height: 24px;
-            image-rendering: pixelated;
-        }
+#gameCanvas {
+    touch-action: none;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    image-rendering: pixelated;
+}
 
-        .skill-btn {
-            width: 64px;
-            background: #581c87;
-            border: 1px solid #8b5cf6;
-            border-radius: 8px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            color: #c4b5fd;
-            position: relative;
-            overflow: hidden;
-        }
-        .skill-btn.ready {
-            background: #7c3aed;
-            color: white;
-            box-shadow: 0 0 15px rgba(139, 92, 246, 0.4);
-            animation: pulse 2s infinite;
-            cursor: pointer;
-        }
-        .skill-btn.disabled {
-            opacity: 0.3;
-            pointer-events: none;
-        }
-        .skill-icon {
-            font-size: 24px;
-        }
-        .skill-name {
-            font-size: 7px;
-            font-weight: bold;
-            margin-top: 2px;
-        }
-        .skill-cooldown {
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            height: 4px;
-            background: rgba(139, 92, 246, 0.3);
-        }
-        .skill-cooldown-fill {
-            height: 100%;
-            background: #8b5cf6;
-            transition: width 0.1s linear;
-        }
-        @keyframes pulse { 0%{box-shadow: 0 0 0 0 rgba(139,92,246,0.7);} 70%{box-shadow: 0 0 0 10px rgba(0,0,0,0);} 100%{box-shadow: 0 0 0 0 rgba(0,0,0,0);} }
+/* 画面上部の情報表示 */
+#hud {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    padding: calc(var(--safe-top) + 6px) 10px 10px;
+    background: linear-gradient(to bottom, rgba(2,6,23,0.85), rgba(2,6,23,0));
+    pointer-events: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    z-index: 5;
+}
+.hud-chip {
+    background: rgba(15,23,42,0.7);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 3px 10px;
+    white-space: nowrap;
+}
+.hud-chip.boss { color: var(--gold); border-color: rgba(251,191,36,0.5); }
+.hud-chip.timer { color: var(--accent); }
 
-        .mana-info {
-            grid-column: 1 / -1;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 0px;
-        }
-        .mana-track {
-            flex-grow: 1;
-            height: 6px;
-            background: #0f172a;
-            border-radius: 3px;
-            margin: 0 10px;
-            overflow: hidden;
-        }
-        .mana-fill {
-            height: 100%;
-            background: var(--mana);
-            width: 0%;
-            transition: width 0.1s linear;
-        }
+/* ============================================================
+   下部パネル（準備フェーズのショップ / バトル中の情報）
+   ============================================================ */
+#panel {
+    flex: 0 0 auto;
+    height: 36vh;
+    min-height: 232px;
+    max-height: 320px;
+    background: var(--panel);
+    border-top: 1px solid var(--line);
+    padding: 8px 10px calc(var(--safe-bottom) + 8px);
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+}
+#prep-panel, #battle-panel {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
 
-        #title-screen {
-            position: fixed;
-            inset: 0;
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #334155 100%);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            z-index: 200;
-        }
-        #title-screen.hidden {
-            display: none;
-        }
-        .title-logo {
-            font-size: 48px;
-            font-weight: 900;
-            letter-spacing: 2px;
-            text-align: center;
-            background: linear-gradient(135deg, #f59e0b, #ef4444, #8b5cf6);
-            -webkit-background-clip: text;
-            background-clip: text;
-            -webkit-text-fill-color: transparent;
-            margin-bottom: 40px;
-            text-shadow: 0 0 30px rgba(245, 158, 11, 0.5);
-        }
-        .btn-start {
-            background: white;
-            color: black;
-            font-weight: 900;
-            padding: 16px 64px;
-            border-radius: 999px;
-            font-size: 24px;
-            letter-spacing: 2px;
-            cursor: pointer;
-            box-shadow: 0 10px 30px rgba(255,255,255,0.3);
-            transition: transform 0.2s;
-        }
-        .btn-start:hover {
-            transform: scale(1.05);
-        }
+/* --- 準備フェーズ --- */
+.prep-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+.gold-box {
+    font-size: 16px;
+    font-weight: 900;
+    color: var(--gold);
+    letter-spacing: 0.5px;
+}
+.gold-box small { font-size: 10px; color: var(--muted); font-weight: 700; }
+.deploy-box {
+    font-size: 11px;
+    color: var(--muted);
+    font-weight: 700;
+    margin-left: auto;
+}
+.deploy-box.full { color: var(--red); }
 
-        #modal {
-            display: none;
-            position: fixed; inset: 0;
-            background: rgba(15, 23, 42, 0.9);
-            z-index: 100;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            backdrop-filter: blur(5px);
-        }
-        .btn-retry {
-            margin-top: 24px;
-            background: white; color: black;
-            font-weight: 800;
-            padding: 14px 48px;
-            border-radius: 99px;
-            font-size: 18px;
-            letter-spacing: 1px;
-            box-shadow: 0 10px 25px rgba(255,255,255,0.2);
-            cursor: pointer;
-        }
+.tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 6px;
+}
+.tab {
+    flex: 1;
+    appearance: none;
+    border: 1px solid var(--line);
+    background: #0f172a;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 800;
+    font-family: inherit;
+    padding: 6px 0;
+    border-radius: 8px;
+    cursor: pointer;
+}
+.tab.active {
+    background: var(--panel2);
+    color: #fff;
+    border-color: var(--accent);
+}
 
-        #reward-screen {
-            display: none;
-            position: fixed;
-            inset: 0;
-            background: rgba(15, 23, 42, 0.95);
-            z-index: 150;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            backdrop-filter: blur(10px);
-        }
-        .reward-title {
-            font-size: 32px;
-            font-weight: 900;
-            margin-bottom: 30px;
-            text-align: center;
-        }
-        .reward-cards {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 15px;
-            max-width: 800px;
-            width: 90%;
-        }
-        .reward-card {
-            padding: 15px;
-            border-radius: 12px;
-            cursor: pointer;
-            transition: all 0.2s;
-            border: 2px solid transparent;
-        }
-        .reward-card:hover {
-            transform: scale(1.05);
-            box-shadow: 0 0 30px currentColor;
-        }
-        .reward-card.unit-reward {
-            background: #065f46;
-            border-color: #10b981;
-        }
-        .reward-card.skill-reward {
-            background: #581c87;
-            border-color: #8b5cf6;
-        }
-        .reward-card.upgrade-reward {
-            background: #92400e;
-            border-color: #f59e0b;
-        }
-        .reward-card-name {
-            font-size: 14px;
-            font-weight: 900;
-            margin-bottom: 8px;
-        }
-        .reward-card-desc {
-            font-size: 10px;
-            opacity: 0.8;
-        }
-    </style>
+#shop-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-right: 2px;
+}
+
+.shop-card {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+    background: #0f172a;
+    border: 2px solid var(--line);
+    border-radius: 10px;
+    padding: 6px 8px;
+    cursor: pointer;
+    position: relative;
+    transition: border-color 0.12s, transform 0.08s, background 0.12s;
+}
+.shop-card:active { transform: scale(0.985); }
+.shop-card.selected {
+    border-color: var(--accent);
+    background: #172033;
+    box-shadow: 0 0 0 1px rgba(245,158,11,0.35), 0 4px 14px rgba(245,158,11,0.18);
+}
+.shop-card.cant-buy { opacity: 0.45; }
+
+.card-icon {
+    width: 40px;
+    height: 40px;
+    flex: 0 0 40px;
+    align-self: center;
+    image-rendering: pixelated;
+}
+.card-emoji {
+    width: 40px;
+    flex: 0 0 40px;
+    align-self: center;
+    text-align: center;
+    font-size: 26px;
+}
+.card-main { flex: 1 1 auto; min-width: 0; }
+.card-top {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.card-name {
+    font-size: 13px;
+    font-weight: 900;
+    letter-spacing: 0.6px;
+}
+.card-type {
+    font-size: 9px;
+    font-weight: 700;
+    color: #0f172a;
+    background: var(--muted);
+    border-radius: 4px;
+    padding: 1px 5px;
+}
+.card-own {
+    font-size: 10px;
+    font-weight: 800;
+    color: var(--green);
+}
+.card-cost {
+    margin-left: auto;
+    font-size: 13px;
+    font-weight: 900;
+    color: var(--gold);
+    white-space: nowrap;
+}
+.card-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px 6px;
+    margin: 3px 0 2px;
+    font-size: 9.5px;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+.card-stats b { color: var(--muted); font-weight: 700; margin-right: 3px; }
+.card-comment {
+    font-size: 9.5px;
+    color: var(--muted);
+    line-height: 1.3;
+}
+.card-note {
+    font-size: 9.5px;
+    color: var(--purple);
+    line-height: 1.3;
+}
+.shop-legend {
+    font-size: 9px;
+    color: var(--muted);
+    padding: 2px 2px 0;
+}
+
+.prep-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+}
+.btn {
+    appearance: none;
+    font-family: inherit;
+    font-weight: 900;
+    letter-spacing: 1px;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: #0f172a;
+    color: var(--text);
+    padding: 11px 12px;
+    font-size: 13px;
+    cursor: pointer;
+}
+.btn:active { transform: scale(0.98); }
+.btn.ghost { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
+.btn.primary {
+    flex: 1 1 auto;
+    background: linear-gradient(135deg, var(--accent), #ef4444);
+    border-color: transparent;
+    color: #fff;
+    font-size: 15px;
+    box-shadow: 0 4px 16px rgba(245,158,11,0.3);
+}
+.btn.primary:disabled { opacity: 0.4; box-shadow: none; }
+
+/* --- バトルフェーズ --- */
+#battle-panel { gap: 8px; }
+.battle-top { display: flex; align-items: center; gap: 8px; }
+.battle-note {
+    font-size: 11px;
+    color: var(--muted);
+    font-weight: 700;
+    line-height: 1.4;
+}
+.battle-note b { color: var(--text); }
+.speed-group { margin-left: auto; display: flex; gap: 4px; }
+.battle-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+}
+.battle-stats div {
+    background: #0f172a;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 6px 4px;
+    text-align: center;
+}
+.battle-stats span { display: block; font-size: 9px; color: var(--muted); font-weight: 700; }
+.battle-stats b { font-size: 15px; font-weight: 900; font-variant-numeric: tabular-nums; }
+.tactic-status {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+.tactic-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #0f172a;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 5px 8px;
+    font-size: 11px;
+    font-weight: 700;
+}
+.tactic-row .t-icon { font-size: 16px; }
+.tactic-row .t-bar {
+    flex: 1 1 auto;
+    height: 5px;
+    background: rgba(148,163,184,0.2);
+    border-radius: 99px;
+    overflow: hidden;
+}
+.tactic-row .t-fill { height: 100%; background: var(--purple); width: 0%; }
+.tactic-empty { font-size: 10px; color: var(--muted); line-height: 1.5; padding: 4px 2px; }
+.speed-btn {
+    appearance: none;
+    font-family: inherit;
+    border: 1px solid var(--line);
+    background: #0f172a;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 900;
+    width: 40px;
+    padding: 8px 0;
+    border-radius: 8px;
+    cursor: pointer;
+}
+.speed-btn.active { background: var(--panel2); color: #fff; border-color: var(--accent); }
+
+/* ============================================================
+   オーバーレイ画面（タイトル / モード選択 / 結果）
+   ============================================================ */
+.screen {
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 20px calc(var(--safe-bottom) + 24px);
+    background: linear-gradient(160deg, #0f172a 0%, #1e293b 55%, #0f172a 100%);
+    text-align: center;
+}
+.screen.show { display: flex; }
+.screen.dim { background: rgba(2,6,23,0.94); backdrop-filter: blur(6px); }
+
+.logo {
+    font-size: 40px;
+    font-weight: 900;
+    font-style: italic;
+    letter-spacing: 1px;
+    line-height: 1.05;
+    background: linear-gradient(135deg, #fbbf24, #ef4444, #8b5cf6);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 6px;
+}
+.logo-sub {
+    font-size: 11px;
+    letter-spacing: 4px;
+    color: var(--muted);
+    margin-bottom: 34px;
+}
+.screen-title {
+    font-size: 15px;
+    font-weight: 900;
+    letter-spacing: 2px;
+    color: var(--muted);
+    margin-bottom: 16px;
+}
+
+.menu-btn {
+    width: 100%;
+    max-width: 300px;
+    appearance: none;
+    font-family: inherit;
+    border: 1px solid var(--line);
+    background: #0f172a;
+    color: #fff;
+    border-radius: 14px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+    text-align: left;
+    cursor: pointer;
+}
+.menu-btn:active { transform: scale(0.99); }
+.menu-btn.big { text-align: center; font-size: 20px; font-weight: 900; letter-spacing: 3px; }
+.menu-btn.fill {
+    background: linear-gradient(135deg, var(--accent), #ef4444);
+    border-color: transparent;
+    box-shadow: 0 6px 20px rgba(245,158,11,0.3);
+}
+.menu-btn.blue { background: linear-gradient(135deg, #3b82f6, #6366f1); border-color: transparent; }
+.menu-btn.plain { background: transparent; color: var(--muted); font-size: 12px; text-align: center; letter-spacing: 1px; }
+.menu-name { font-size: 17px; font-weight: 900; letter-spacing: 2px; }
+.menu-desc { font-size: 11px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+
+.diff-row { display: flex; gap: 6px; width: 100%; max-width: 300px; margin: 2px 0 16px; }
+.diff-btn {
+    flex: 1;
+    appearance: none;
+    font-family: inherit;
+    border: 1px solid var(--line);
+    background: #0f172a;
+    color: var(--muted);
+    border-radius: 10px;
+    padding: 8px 0;
+    font-size: 12px;
+    font-weight: 900;
+    cursor: pointer;
+}
+.diff-btn.active { background: var(--panel2); color: #fff; border-color: var(--accent); }
+
+.result-title {
+    font-size: 44px;
+    font-weight: 900;
+    font-style: italic;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+}
+.result-title.win { color: var(--green); text-shadow: 0 0 24px rgba(16,185,129,0.5); }
+.result-title.lose { color: var(--red); text-shadow: 0 0 24px rgba(239,68,68,0.5); }
+.result-msg { font-size: 12px; color: var(--muted); margin-bottom: 18px; }
+.result-stats {
+    width: 100%;
+    max-width: 300px;
+    background: rgba(15,23,42,0.8);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 10px 14px;
+    margin-bottom: 20px;
+    font-size: 12px;
+}
+.result-row { display: flex; justify-content: space-between; padding: 3px 0; }
+.result-row span:first-child { color: var(--muted); }
+.result-row span:last-child { font-weight: 900; }
+
+/* ============================================================
+   トースト（alert / confirm の代替）
+   ============================================================ */
+#toast {
+    position: absolute;
+    left: 50%;
+    bottom: 62px;
+    transform: translate(-50%, 12px);
+    background: rgba(2,6,23,0.92);
+    border: 1px solid var(--line);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 9px 16px;
+    border-radius: 999px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s, transform 0.18s;
+    z-index: 90;
+    white-space: nowrap;
+    max-width: 92%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+#toast.show { opacity: 1; transform: translate(-50%, 0); }
+</style>
 </head>
 <body>
 
-<div id="title-screen">
-    <div class="title-logo">PIXEL SIEGE</div>
-    <div class="btn-start" onclick="startGame()">START</div>
-    <div class="btn-start" id="btn-continue" onclick="loadGame()" style="display: none; margin-top: 20px; background: #3b82f6; color: white;">CONTINUE</div>
-</div>
-
-<div class="game-wrapper">
-    <div class="canvas-container">
+<div id="app">
+    <!-- フィールド -->
+    <div id="stage">
         <canvas id="gameCanvas"></canvas>
+        <div id="hud">
+            <div class="hud-chip" id="hud-left">STORY</div>
+            <div class="hud-chip boss" id="hud-boss" style="display:none">BOSS</div>
+            <div class="hud-chip timer" id="hud-right" style="display:none">60</div>
+        </div>
+        <div id="toast"></div>
+    </div>
 
-        <div class="hud-top">
-            <div id="boss-hp-container" class="boss-hp-container">
-                <div class="hp-label text-yellow-400">BOSS: <span id="boss-name">???</span></div>
-                <div class="bar-track"><div id="boss-hp" class="bar-fill bg-yellow-500" style="width:100%"></div></div>
+    <!-- 下部パネル -->
+    <div id="panel">
+        <!-- 準備フェーズ -->
+        <div id="prep-panel">
+            <div class="prep-head">
+                <div class="gold-box"><span id="gold-val">0</span>G <small>残予算</small></div>
+                <div class="deploy-box" id="deploy-box">配置 0/15</div>
             </div>
+            <div class="tabs">
+                <button class="tab active" id="tab-units">ユニット</button>
+                <button class="tab" id="tab-upgrades">強化</button>
+                <button class="tab" id="tab-tactics">戦術</button>
+            </div>
+            <div id="shop-list"></div>
+            <div class="prep-actions">
+                <button class="btn ghost" id="btn-clear">全解除</button>
+                <button class="btn primary" id="btn-start-battle">バトル開始</button>
+            </div>
+        </div>
 
-            <div class="bars-wrapper">
-                <div class="hp-group text-right">
-                    <div class="hp-label text-green-400">YOUR BASE</div>
-                    <div class="bar-track"><div id="player-hp" class="bar-fill bg-green-500" style="width:100%"></div></div>
+        <!-- バトルフェーズ -->
+        <div id="battle-panel" style="display:none">
+            <div class="battle-top">
+                <div class="battle-note"><b>バトル中</b> — 全自動で進行します<br>操作はできません（観戦）</div>
+                <div class="speed-group">
+                    <button class="speed-btn active" data-speed="1">x1</button>
+                    <button class="speed-btn" data-speed="2">x2</button>
+                    <button class="speed-btn" data-speed="3">x3</button>
                 </div>
             </div>
-        </div>
-    </div>
-
-    <div class="control-panel">
-        <div class="mana-info">
-            <span class="text-[10px] font-bold text-blue-300">MANA <span id="mana-val">0</span></span>
-            <div class="mana-track"><div id="mana-bar" class="mana-fill"></div></div>
-            <span class="text-[10px] font-bold text-slate-400">WAVE <span id="wave-num">1</span></span>
-        </div>
-
-        <div class="deck-scroller" id="unit-deck">
-        </div>
-
-        <div id="btn-skill" class="skill-btn disabled" onclick="useSkill()">
-            <div class="skill-icon" id="skill-icon">🔮</div>
-            <div class="skill-name" id="skill-name">NONE</div>
-            <div class="text-[8px] font-bold" id="skill-timer">--</div>
-            <div class="skill-cooldown">
-                <div class="skill-cooldown-fill" id="skill-cd-bar" style="width:100%"></div>
+            <div class="battle-stats">
+                <div><span>味方</span><b id="bs-allies">0</b></div>
+                <div><span>敵</span><b id="bs-enemies">0</b></div>
+                <div><span>撃破</span><b id="bs-kills">0</b></div>
+                <div><span>残り</span><b id="bs-time">0</b></div>
             </div>
+            <div class="tactic-status" id="tactic-status"></div>
         </div>
     </div>
-</div>
 
-<div id="reward-screen">
-    <div class="reward-title">CHOOSE YOUR REWARD</div>
-    <div class="reward-cards" id="reward-cards">
+    <!-- タイトル画面 -->
+    <div class="screen show" id="screen-title">
+        <div class="logo">PIXEL<br>SIEGE</div>
+        <div class="logo-sub">E L I T E</div>
+        <button class="menu-btn big fill" id="btn-newgame">START</button>
+        <button class="menu-btn big blue" id="btn-continue" style="display:none">CONTINUE</button>
+        <div class="menu-desc" style="margin-top:18px">準備フェーズで編成し、バトルは全自動。<br>スマホ縦画面向けオートバトラー。</div>
     </div>
-</div>
 
-<div id="modal">
-    <h1 id="modal-title" class="text-6xl font-black italic mb-2 text-transparent bg-clip-text bg-gradient-to-br from-green-400 to-blue-500">VICTORY</h1>
-    <p id="modal-msg" class="text-slate-400 font-mono text-sm">MISSION COMPLETE</p>
-    <div onclick="backToTitle()" class="btn-retry">BACK TO TITLE</div>
+    <!-- モード選択画面 -->
+    <div class="screen" id="screen-mode">
+        <div class="screen-title">SELECT MODE</div>
+        <button class="menu-btn" id="btn-mode-story">
+            <div class="menu-name">STORY</div>
+            <div class="menu-desc">全7ステージ。ウェーブと ボスを撃破して進む1人用モード。</div>
+        </button>
+        <button class="menu-btn" id="btn-mode-battle">
+            <div class="menu-name">BATTLE</div>
+            <div class="menu-desc">AI と同じ予算で戦う対戦モード。勝ち抜くほど予算と難易度が上がる。</div>
+        </button>
+        <div class="diff-row" id="diff-row">
+            <button class="diff-btn" data-diff="easy">EASY</button>
+            <button class="diff-btn active" data-diff="normal">NORMAL</button>
+            <button class="diff-btn" data-diff="hard">HARD</button>
+        </div>
+        <button class="menu-btn plain" id="btn-mode-back">← タイトルへ戻る</button>
+    </div>
+
+    <!-- 結果画面 -->
+    <div class="screen dim" id="screen-result">
+        <div class="result-title win" id="result-title">VICTORY</div>
+        <div class="result-msg" id="result-msg">WAVE 1 CLEAR</div>
+        <div class="result-stats" id="result-stats"></div>
+        <button class="menu-btn big fill" id="btn-result-next">つぎへ</button>
+        <button class="menu-btn plain" id="btn-result-retry">このラウンドをやり直す</button>
+        <button class="menu-btn plain" id="btn-result-title">タイトルへ戻る</button>
+    </div>
+
 </div>
 
 <script src="sprites.js"></script>
 <script src="game-data.js"></script>
 <script src="game.js"></script>
-
 </body>
 </html>

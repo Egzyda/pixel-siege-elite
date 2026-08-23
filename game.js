@@ -1,383 +1,271 @@
-class Boss {
-    constructor(waveNum) {
-        this.data = BOSS_DEFS[waveNum];
-        this.waveNum = waveNum;
-        this.hp = this.data.hp;
-        this.maxHp = this.data.hp;
-        this.x = state.w / 2;
-        this.y = 50;
-        this.dmg = this.data.dmg;
-        this.speed = this.data.speed;
-        this.special = this.data.special;
-        this.specialTimer = 0;
-        this.cd = 0;
-        this.vx = 0;
-        this.vy = 0;
+// ============================================================
+// game.js — ゲーム本体
+//   準備フェーズ（購入・配置）→ バトルフェーズ（全自動）→ 結果 → ショップ
+//   というサイクルで進行するカジュアルオートバトラー。
+// ============================================================
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+const SAVE_KEY = 'pixelSiegeElite_v2';
+
+// ============================================================
+// ゲーム状態
+// ============================================================
+const state = {
+    w: 0, h: 0,               // フィールドの論理サイズ（CSS ピクセル）
+    scene: 'title',           // title / mode / prep / battle / result
+    mode: 'story',            // story（ステージ） / battle（AI 対戦）
+    difficulty: 'normal',     // AI 対戦モードの難易度
+    round: 1,                 // ウェーブ番号 / ラウンド番号
+    gold: 0,                  // 残予算
+
+    roster: [],               // プレイヤー編成 [{id, key, x, y}]
+    aiRoster: [],             // AI 編成 [{id, key, x, y}]
+    aiGold: 0,                // AI の残予算（繰り越し用）
+    aiPower: 1,               // AI が余剰予算で得た編成強化倍率
+    nextId: 1,
+
+    units: [],                // バトル中のユニット実体
+    projs: [], fx: [], popups: [],
+    boss: null,
+    playerBase: null,
+    enemyBase: null,
+
+    upgrades: {},             // 購入済みの強化 {key: 個数}
+    tactics: {},              // 購入済みの戦術 {key: true}
+    tacticTimers: {},         // 戦術のクールダウン残り（フレーム）
+
+    shopTab: 'units',         // ショップの表示タブ
+    selected: null,           // 選択中のショップユニット
+    drag: null,               // ドラッグ中の配置ユニット
+
+    spawnQueue: [],           // 未出現の敵集団（ステージモード）
+    spawnTimer: 0,
+    bossDelay: -1,            // ボス出現までのカウントダウン
+    bossCleared: false,
+
+    battleTimer: 0,           // 残り時間（フレーム）
+    speed: 1,                 // 観戦速度倍率
+    timeWarp: 0,              // タイムワープ残り（フレーム）
+    shake: 0,
+    kills: 0,
+    snapshot: null,           // ラウンド開始時の状態（やり直し用）
+    result: null              // 直前のバトル結果
+};
+
+// ============================================================
+// ユーティリティ
+// ============================================================
+const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const randRange = (min, max) => min + Math.random() * (max - min);
+
+// ダメージ表示などのポップアップ
+function spawnPop(x, y, text, color) {
+    state.popups.push({ x, y, text, color, life: 1.0, rise: 0 });
+}
+
+// 画面シェイク（バイブレーションも併用）
+function addShake(v) {
+    state.shake = Math.max(state.shake, v);
+    if(navigator.vibrate) navigator.vibrate(Math.min(40, v * 6));
+}
+
+// トースト表示（alert/confirm の代わり）
+let toastTimer = null;
+function toast(msg) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 1600);
+}
+
+// ============================================================
+// 強化（アップグレード）の効果計算
+// ============================================================
+const upCount     = k => state.upgrades[k] || 0;
+const atkMult     = () => Math.pow(1.15, upCount('atk_boost'));
+const hpMult      = () => Math.pow(1.20, upCount('hp_boost'));
+const rateMult    = () => Math.pow(0.88, upCount('atk_speed'));
+const moveMult    = () => Math.pow(1.20, upCount('speed_boost'));
+const rangeMult   = () => Math.pow(1.15, upCount('range_ext'));
+const baseBonusHp = () => 400 * upCount('fortified');
+const baseRegen   = () => 8 * upCount('regen');
+const thornsRate  = () => Math.min(0.75, 0.25 * upCount('thorns'));
+const vampireRate = () => Math.min(0.5, 0.10 * upCount('vampire'));
+
+// AI 対戦モードで敵ユニットに掛かる強化倍率
+// （ラウンド進行によるスケーリング + AI が余剰予算を注ぎ込んだ分）
+function enemyPowerMult() {
+    if(state.mode !== 'battle') return 1;
+    const p = AI_PRESETS[state.difficulty];
+    return (state.aiPower || 1) * (1 + p.powerStep * (state.round - 1));
+}
+
+// 強化・戦術の現在価格（強化は買うたびに高くなる）
+function upgradePrice(key) {
+    return Math.round(UPGRADE_DEFS[key].cost * Math.pow(UPGRADE_PRICE_SCALE, upCount(key)));
+}
+
+// ============================================================
+// フィールドのレイアウト計算
+// ============================================================
+function layout() {
+    return {
+        deployTop: state.h * 0.55,        // プレイヤーが配置できる上端
+        deployBottom: state.h - 54,       // プレイヤーが配置できる下端（拠点の手前）
+        enemyTop: 112,                    // 敵の出現エリア上端
+        enemyBottom: state.h * 0.34       // 敵の出現エリア下端
+    };
+}
+
+// ============================================================
+// 拠点（城）
+// x, y は「狙われる中心座標」。描画は y + 16 を足元として行う。
+// ============================================================
+class Base {
+    constructor(isP) {
+        this.isP = isP;
+        this.maxHp = BASE_HP + (isP ? baseBonusHp() : 0);
+        this.hp = this.maxHp;
+        this.radius = BASE_RADIUS;
+        this.def = { mass: 999 };
+        this.isBase = true;
         this.flash = 0;
-        this.anim = 0;
-        this.sprite = this.data.sprite;
-        this.palette = this.data.palette;
-        this.currentPhase = 0;
-        this.deadEnemies = []; // For necromancer revive
-        this.fireTimer = 0;
+        this.shake = 0;
+        this.scale = 3;
+        this.reposition();
     }
 
-    update(dt) {
-        if(this.flash > 0) this.flash--;
-        if(this.cd > 0) this.cd -= dt;
-        this.specialTimer += dt;
-        this.fireTimer += dt;
-
-        // Phase system for Chaos Titan
-        if(this.special === 'phases' && this.data.phases) {
-            const hpPercent = this.hp / this.maxHp;
-            for(let i = this.data.phases.length - 1; i >= 0; i--) {
-                if(hpPercent <= this.data.phases[i].hpThreshold && this.currentPhase !== i) {
-                    this.currentPhase = i;
-                    const phase = this.data.phases[i];
-                    this.speed = this.data.speed * phase.speedMult;
-                    this.dmg = this.data.dmg * phase.damageMult;
-                    spawnPop(this.x, this.y - 30, `PHASE ${i + 1}!`, '#ef4444');
-                    addShake(8);
-                    break;
-                }
-            }
-        }
-
-        this.x += this.vx * dt;
-        this.y += this.vy * dt;
-        this.vx *= 0.85;
-        this.vy *= 0.85;
-
-        // Find nearest player unit
-        let target = null;
-        let minD = 9999;
-        state.units.filter(u => u.isP).forEach(u => {
-            const d = Math.hypot(u.x - this.x, u.y - this.y);
-            if(d < minD) {
-                minD = d;
-                target = u;
-            }
-        });
-
-        const attackRange = 40;
-
-        if(target && minD < 300) {
-            // Move toward player units
-            const angle = Math.atan2(target.y - this.y, target.x - this.x);
-            this.y += Math.sin(angle) * this.speed * dt;
-            this.x += Math.cos(angle) * this.speed * dt;
-
-            // Attack if in range
-            if(minD <= attackRange && this.cd <= 0) {
-                this.cd = 60;
-                target.takeDmg(this.dmg, this);
-                addShake(4);
-            }
-        } else {
-            // No player units, move toward base
-            const targetY = state.h - 40;
-            const dy = targetY - this.y;
-
-            if(Math.abs(dy) > 50) {
-                this.y += Math.sign(dy) * this.speed * dt;
-            } else {
-                // Attack base
-                if(this.cd <= 0) {
-                    this.cd = 60;
-                    state.pHP -= this.dmg;
-                    addShake(6);
-                    spawnPop(this.x, state.h - 40, this.dmg, '#ef4444');
-                    
-                    // Counter Strike upgrade
-                    if(state.upgrades.includes('counter')) {
-                        this.takeDmg(50, null);
-                        spawnPop(this.x, this.y, 'COUNTER!', '#fbbf24');
-                    }
-                }
-            }
-        }
-
-        // Special ability triggers
-        this.useSpecial();
-
-        // Bounds
-        this.x = Math.max(30, Math.min(state.w - 30, this.x));
-        this.y = Math.max(50, Math.min(state.h - 100, this.y));
-    }
-
-    useSpecial() {
-        switch(this.special) {
-            case 'summon':
-                if(this.specialTimer > this.data.summonInterval) {
-                    this.specialTimer = 0;
-                    const summonType = this.data.summonType;
-                    const count = this.data.summonCount || 2;
-                    
-                    for(let i = 0; i < count; i++) {
-                        const def = UNIT_DEFS[summonType];
-                        const angle = (Math.PI * 2 / count) * i;
-                        const dist = 60;
-                        
-                        const enemy = {
-                            key: summonType,
-                            def: def,
-                            isP: false,
-                            x: this.x + Math.cos(angle) * dist,
-                            y: this.y + Math.sin(angle) * dist,
-                            hp: def.hp,
-                            max: def.hp,
-                            dmg: def.dmg,
-                            speed: def.speed,
-                            rate: def.rate,
-                            range: def.range,
-                            cd: 0,
-                            vx: 0, vy: 0,
-                            anim: Math.random() * 10,
-                            flash: 0,
-                            pal: PALETTES[summonType],
-                            update: Unit.prototype.update,
-                            attack: Unit.prototype.attack,
-                            takeDmg: Unit.prototype.takeDmg,
-                            draw: Unit.prototype.draw
-                        };
-                        state.units.push(enemy);
-                    }
-                    spawnPop(this.x, this.y - 20, 'SUMMON!', '#f59e0b');
-                }
-                break;
-                
-            case 'teleport':
-                if(this.specialTimer > this.data.teleportInterval) {
-                    this.specialTimer = 0;
-                    this.x = Math.random() * (state.w - 100) + 50;
-                    this.y = Math.random() * 150 + 50;
-                    spawnPop(this.x, this.y, 'WARP!', '#8b5cf6');
-                }
-                break;
-                
-            case 'fire':
-                if(this.fireTimer > this.data.fireInterval) {
-                    this.fireTimer = 0;
-                    // AOE fire damage to nearby player units
-                    const fireRadius = 100;
-                    state.units.filter(u => u.isP && Math.hypot(u.x - this.x, u.y - this.y) < fireRadius).forEach(u => {
-                        u.takeDmg(this.data.fireDamage, this);
-                    });
-                    spawnPop(this.x, this.y, 'FLAME!', '#f97316');
-                    addShake(5);
-                    
-                    // Visual effect
-                    for(let i = 0; i < 12; i++) {
-                        const angle = (Math.PI * 2 / 12) * i;
-                        state.fx.push({
-                            x: this.x + Math.cos(angle) * 40,
-                            y: this.y + Math.sin(angle) * 40,
-                            vx: Math.cos(angle) * 3,
-                            vy: Math.sin(angle) * 3,
-                            life: 30,
-                            color: '#f97316'
-                        });
-                    }
-                }
-                break;
-                
-            case 'revive':
-                if(this.specialTimer > this.data.reviveInterval && this.deadEnemies.length > 0) {
-                    this.specialTimer = 0;
-                    const toRevive = Math.min(2, this.deadEnemies.length);
-                    
-                    for(let i = 0; i < toRevive; i++) {
-                        const deadUnit = this.deadEnemies.pop();
-                        const def = UNIT_DEFS['skeleton'];
-                        
-                        const revived = {
-                            key: 'skeleton',
-                            def: def,
-                            isP: false,
-                            x: this.x + (Math.random() - 0.5) * 80,
-                            y: this.y + 40,
-                            hp: def.hp,
-                            max: def.hp,
-                            dmg: def.dmg,
-                            speed: def.speed,
-                            rate: def.rate,
-                            range: def.range,
-                            cd: 0,
-                            vx: 0, vy: 0,
-                            anim: Math.random() * 10,
-                            flash: 0,
-                            pal: PALETTES.skeleton,
-                            update: Unit.prototype.update,
-                            attack: Unit.prototype.attack,
-                            takeDmg: Unit.prototype.takeDmg,
-                            draw: Unit.prototype.draw
-                        };
-                        state.units.push(revived);
-                    }
-                    spawnPop(this.x, this.y - 20, 'REVIVE!', '#8b5cf6');
-                }
-                break;
-                
-            case 'laser':
-                if(this.specialTimer > this.data.laserInterval) {
-                    this.specialTimer = 0;
-                    // Laser beam at player base
-                    const laserX = state.w / 2;
-                    const laserY = state.h - 40;
-                    const laserWidth = 60;
-                    
-                    state.units.filter(u => u.isP && Math.abs(u.x - laserX) < laserWidth).forEach(u => {
-                        u.takeDmg(this.data.laserDamage, this);
-                    });
-                    
-                    state.pHP -= this.data.laserDamage;
-                    spawnPop(laserX, laserY, 'LASER!', '#3b82f6');
-                    addShake(10);
-                    
-                    // Laser visual
-                    state.fx.push({
-                        type: 'laser',
-                        x1: this.x,
-                        y1: this.y,
-                        x2: laserX,
-                        y2: laserY,
-                        life: 20,
-                        color: '#3b82f6'
-                    });
-                }
-                break;
-        }
+    reposition() {
+        this.x = state.w / 2;
+        this.y = this.isP ? state.h - 22 : 72;
     }
 
     takeDmg(v, attacker) {
-        if(this.special === 'armor') {
-            v *= this.data.armorReduction;
-            if(Math.random() < 0.3) {
-                spawnPop(this.x, this.y - 20, 'ARMOR!', '#78716c');
-            }
-        }
+        if(this.hp <= 0) return;
+        this.hp = Math.max(0, this.hp - v);
+        this.flash = 8;
+        this.shake = 6;
+        addShake(4);
+        spawnPop(this.x + randRange(-14, 14), this.y - 10, Math.floor(v), '#ef4444');
 
-        this.hp -= v;
-        this.flash = 6;
-        spawnPop(this.x, this.y - 20, Math.floor(v), '#fff');
-
-        // Vampire healing for attacker
-        if(attacker && attacker.isP && state.upgrades.includes('vampire')) {
-            const heal = Math.abs(v) * 0.1;
-            attacker.hp = Math.min(attacker.max, attacker.hp + heal);
+        // 反射装甲（自拠点のみ）
+        if(this.isP && attacker && thornsRate() > 0 && attacker.takeDmg) {
+            attacker.takeDmg(v * thornsRate(), null);
         }
+    }
 
-        if(this.hp <= 0) {
-            this.hp = 0;
-            onBossDefeated();
-        }
+    heal(v) {
+        this.hp = Math.min(this.maxHp, this.hp + v);
+    }
+
+    update() {
+        if(this.flash > 0) this.flash--;
+        if(this.shake > 0) this.shake *= 0.86;
     }
 
     draw(ctx) {
-        // Shadow
-        ctx.fillStyle = 'rgba(0,0,0,0.5)';
-        ctx.beginPath();
-        ctx.ellipse(this.x, this.y, 40, 15, 0, 0, Math.PI * 2);
-        ctx.fill();
+        const pal = this.isP ? PALETTES.castle_player : PALETTES.castle_enemy;
+        const sx = this.shake > 0.2 ? randRange(-this.shake, this.shake) : 0;
+        const footY = this.y + 16;
 
-        // Bounce animation
-        this.anim += 0.1;
-        const by = Math.abs(Math.sin(this.anim)) * 5;
+        drawShadow(ctx, SPRITES.castle, this.x + sx, footY, this.scale, 0.4);
+        drawSprite(ctx, SPRITES.castle, pal, this.x + sx, footY, this.scale, { flash: this.flash > 0 });
 
-        ctx.save();
-        ctx.translate(this.x, this.y - by);
-        ctx.scale(1, -1); // Flip sprite to face downward
-
-        const px = 3; // Boss sprite scale
-        const sprite = this.sprite.idle || this.sprite;
-        ctx.translate(-7 * px, -12 * px);
-
-        for(let r = 0; r < 14; r++) {
-            for(let c = 0; c < 16; c++) {
-                const idx = sprite[r][c];
-                if(idx > 0) {
-                    ctx.fillStyle = this.flash > 0 ? '#fff' : this.palette[idx];
-                    ctx.fillRect(c * px, r * px, px, px);
-                }
-            }
-        }
-        ctx.restore();
-
-        // HP Bar
-        const w = 100;
-        ctx.fillStyle = 'black';
-        ctx.fillRect(this.x - w/2, this.y - 60, w, 7);
-        ctx.fillStyle = '#f59e0b';
-        ctx.fillRect(this.x - w/2 + 1, this.y - 59, (w - 2) * (this.hp / this.maxHp), 5);
+        // 拠点の HP バー（拠点オブジェクトの上に表示）
+        const box = getSpriteBox(SPRITES.castle);
+        const topY = footY - box.h * this.scale - 10;
+        drawHpBar(ctx, this.x + sx, topY, 54, 6, this.hp / this.maxHp, this.isP ? '#10b981' : '#ef4444');
     }
 }
 
-/**
- * --- GAME STATE ---
- */
-let state = {
-    w: 0, h: 0,
-    scene: 'title',
-    wave: 1,
-    deck: [],
-    skill: null,
-    upgrades: [],
-    mana: 50, maxMana: 100, manaRate: 1.0,
-    pHP: 1500, maxHP: 1500,
-    units: [], fx: [], projs: [], popups: [],
-    boss: null,
-    sel: null, shake: 0,
-    rewardOptions: [],
-    // Upgrade multipliers
-    atkMult: 1.0,
-    hpMult: 1.0,
-    speedMult: 1.0,
-    rangeMult: 1.0,
-    rateMult: 1.0,
-    costMult: 1.0,
-    baseRegen: 0,
-    summonY: 0,
-    // Wave spawning
-    waveSpawner: null,
-    currentWaveIndex: 0,
-    spawnTimer: 0,
-    waitingForBoss: false,
-    // Skill effects
-    timeWarpActive: false,
-    timeWarpTimer: 0,
-    manaSurgeActive: false,
-    manaSurgeTimer: 0
-};
+// HP バー描画（中央揃え）
+function drawHpBar(ctx, cx, y, w, h, ratio, color) {
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.fillRect(cx - w / 2, y, w, h);
+    ctx.fillStyle = color;
+    ctx.fillRect(cx - w / 2 + 1, y + 1, (w - 2) * clamp(ratio, 0, 1), h - 2);
+}
 
-const canvas = document.getElementById('gameCanvas');
-const ctx = canvas.getContext('2d', { alpha: false });
-
-/**
- * --- UNIT CLASS ---
- */
+// ============================================================
+// ユニット
+// ============================================================
 class Unit {
-    constructor(k, isP, x, y) {
-        this.key = k;
-        this.def = UNIT_DEFS[k];
+    constructor(key, isP, x, y, opts) {
+        const o = opts || {};
+        this.key = key;
+        this.def = UNIT_DEFS[key];
         this.isP = isP;
         this.x = x;
         this.y = y;
+        this.rid = o.rid || 0;              // 編成データとの対応 ID
 
-        // Apply upgrades
-        this.hp = this.def.hp * state.hpMult;
-        this.max = this.hp;
-        this.dmg = this.def.dmg * state.atkMult;
-        this.speed = this.def.speed * state.speedMult;
-        this.rate = this.def.rate * state.rateMult;
-        this.range = this.def.range * (this.def.type === 'ranged' || this.def.type === 'aoe' ? state.rangeMult : 1);
+        // プレイヤー側のみ強化の効果を受ける
+        const ep = isP ? 1 : enemyPowerMult();
+        const am = isP ? atkMult() : ep;
+        const hm = isP ? hpMult() : ep;
+        const rm = isP ? rateMult() : 1;
+        const sm = isP ? moveMult() : 1;
+        const gm = isP ? rangeMult() : 1;
 
-        this.cd = 0;
-        this.vx = 0;
-        this.vy = 0;
+        this.max = Math.round(this.def.hp * hm);
+        this.hp = this.max;
+        this.dmg = this.def.dmg * am;
+        this.rate = this.def.rate * rm;
+        this.speed = this.def.speed * sm;
+        this.range = this.def.range * (this.def.type === 'ranged' || this.def.type === 'aoe' || this.def.type === 'healer' ? gm : 1);
+        this.scale = key === 'giant' ? 3 : 2;
+
+        this.cd = Math.random() * 10;
+        this.vx = 0; this.vy = 0;
         this.anim = Math.random() * 10;
         this.flash = 0;
-        this.pal = k === 'healer' ? PALETTES.healer : PALETTES[k];
+        this.lifetime = o.lifetime || 0;    // 0 なら寿命なし
+        this.pal = isP ? this.def.pal : (ENEMY_PALETTES[key] || this.def.pal);
+        this.radius = 7;
+    }
+
+    // 攻撃対象を探す
+    findTarget() {
+        // 回復役は最も HP 割合の低い味方を狙う。
+        // 負傷者がいない場合は最寄りの味方に追従するだけで、敵は狙わない。
+        if(this.def.type === 'healer') {
+            let best = null, worst = 1;
+            for(const u of state.units) {
+                if(u.isP !== this.isP || u === this) continue;
+                const r = u.hp / u.max;
+                if(r < worst && r < 0.999) { worst = r; best = u; }
+            }
+            if(best) return best;
+
+            let ally = null, ad = Infinity;
+            for(const u of state.units) {
+                if(u.isP !== this.isP || u === this) continue;
+                const d = dist(u, this);
+                if(d < ad) { ad = d; ally = u; }
+            }
+            return ally;
+        }
+
+        let best = null, bd = Infinity;
+        for(const u of state.units) {
+            if(u.isP === this.isP || u.hp <= 0) continue;
+            const d = dist(u, this);
+            if(d < bd) { bd = d; best = u; }
+        }
+        // ボスはプレイヤー側の攻撃対象
+        if(this.isP && state.boss && state.boss.hp > 0) {
+            const d = dist(state.boss, this);
+            if(d < bd) { bd = d; best = state.boss; }
+        }
+
+        // 近くに敵がいなければ敵拠点を目標にする
+        const foeBase = this.isP ? state.enemyBase : state.playerBase;
+        if((!best || bd > 210) && foeBase && foeBase.hp > 0) return foeBase;
+        return best;
     }
 
     update(dt) {
@@ -385,1039 +273,1554 @@ class Unit {
         if(this.cd > 0) this.cd -= dt;
         this.anim += dt * 0.15;
 
-        // Apply time warp slow to enemies
-        let effectiveSpeed = this.speed;
-        if(!this.isP && state.timeWarpActive) {
-            effectiveSpeed *= 0.5;
+        // ノックバックの慣性
+        this.x += this.vx * dt;
+        this.y += this.vy * dt;
+        this.vx *= 0.85;
+        this.vy *= 0.85;
+
+        // タイムワープ中は敵の移動速度が半減する
+        let spd = this.speed;
+        if(!this.isP && state.timeWarp > 0) spd *= 0.5;
+
+        const target = this.findTarget();
+
+        if(target) {
+            const d = dist(target, this);
+            const reach = this.range + (target.radius || 0);
+
+            if(d <= reach) {
+                if(this.cd <= 0) {
+                    this.cd = this.rate;
+                    this.attack(target);
+                }
+            } else {
+                const a = Math.atan2(target.y - this.y, target.x - this.x);
+                this.x += Math.cos(a) * spd * dt;
+                this.y += Math.sin(a) * spd * dt;
+            }
+        } else {
+            // 目標が無い場合は敵陣側へ前進して待機する
+            const holdY = this.isP ? 100 : state.h - 100;
+            if(Math.abs(this.y - holdY) > 4) {
+                this.y += Math.sign(holdY - this.y) * spd * dt;
+            }
         }
+
+        // ユニット同士の押し合い
+        for(const u of state.units) {
+            if(u === this) continue;
+            const dx = this.x - u.x, dy = this.y - u.y;
+            const d = Math.hypot(dx, dy);
+            if(d < 14 && d > 0.001) {
+                const f = (14 - d) * 0.08;
+                this.x += (dx / d) * f;
+                this.y += (dy / d) * f;
+            }
+        }
+
+        this.x = clamp(this.x, 14, state.w - 14);
+        this.y = clamp(this.y, 24, state.h - 14);
+    }
+
+    attack(t) {
+        if(this.def.type === 'healer') {
+            // 回復（対象は味方ユニットのみ。拠点や敵は対象外）
+            if(!t || t.isBase || t.isP !== this.isP || t.hp >= t.max) return;
+            const heal = Math.abs(this.dmg);
+            t.hp = Math.min(t.max, t.hp + heal);
+            spawnPop(t.x, t.y - 18, '+' + Math.floor(heal), '#34d399');
+            state.fx.push({ type:'heal', x:t.x, y:t.y - 10, life:24, color:'#34d399' });
+            return;
+        }
+
+        if(this.def.type === 'ranged' || this.def.type === 'aoe') {
+            state.projs.push({
+                x: this.x, y: this.y - 14,
+                target: t, dmg: this.dmg, def: this.def,
+                isP: this.isP, owner: this, active: true
+            });
+        } else {
+            t.takeDmg(this.dmg, this);
+            // ノックバック
+            if(t.vx !== undefined) {
+                const a = Math.atan2(t.y - this.y, t.x - this.x);
+                const k = (this.def.kb / (t.def && t.def.mass ? t.def.mass : 2)) * 2;
+                t.vx += Math.cos(a) * k;
+                t.vy += Math.sin(a) * k;
+            }
+        }
+    }
+
+    takeDmg(v, attacker) {
+        if(this.hp <= 0) return;
+        this.hp -= v;
+        this.flash = 6;
+        spawnPop(this.x, this.y - 22, Math.floor(v), '#ffffff');
+
+        // 吸血（プレイヤー側の攻撃のみ）
+        if(attacker && attacker.isP && vampireRate() > 0 && attacker.hp !== undefined) {
+            attacker.hp = Math.min(attacker.max, attacker.hp + v * vampireRate());
+        }
+        // 反射装甲（プレイヤー側が受けたダメージのみ）
+        if(attacker && this.isP && thornsRate() > 0 && attacker.takeDmg) {
+            attacker.takeDmg(v * thornsRate(), null);
+        }
+
+        if(this.hp <= 0) {
+            this.hp = 0;
+            onUnitDeath(this);
+        }
+    }
+
+    draw(ctx) {
+        const bounce = Math.abs(Math.sin(this.anim)) * 2.5;
+
+        drawShadow(ctx, this.def.sprite, this.x, this.y, this.scale, 0.35);
+
+        // 陣営が一目で分かるように足元にリングを描く
+        ctx.strokeStyle = this.isP ? 'rgba(16,185,129,0.75)' : 'rgba(239,68,68,0.75)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.ellipse(this.x, this.y, this.scale * 5, this.scale * 2, 0, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // 敵ユニットは左右反転して向かい合わせる（上下反転はしない）
+        drawSprite(ctx, this.def.sprite, this.pal, this.x, this.y - bounce, this.scale, {
+            flash: this.flash > 0,
+            flipX: !this.isP
+        });
+
+        // HP バーはスプライトの実寸に合わせて上に配置する
+        const box = getSpriteBox(this.def.sprite);
+        const topY = this.y - bounce - box.h * this.scale - 6;
+        drawHpBar(ctx, this.x, topY, 22, 4, this.hp / this.max, this.isP ? '#10b981' : '#ef4444');
+    }
+}
+
+// ユニット撃破時の処理
+function onUnitDeath(u) {
+    if(!u.isP) {
+        state.kills++;
+        // ネクロマンサー用に死体を記録
+        if(state.boss && state.boss.special === 'revive') {
+            state.boss.corpses.push(u.key);
+            if(state.boss.corpses.length > 12) state.boss.corpses.shift();
+        }
+    }
+    for(let i = 0; i < 6; i++) {
+        state.fx.push({
+            x: u.x, y: u.y - 10,
+            vx: randRange(-2, 2), vy: randRange(-2.5, 0.5),
+            life: 22, color: u.isP ? '#34d399' : '#f87171'
+        });
+    }
+}
+
+// ============================================================
+// ボス
+// ============================================================
+class Boss {
+    constructor(waveNum) {
+        this.data = BOSS_DEFS[waveNum];
+        this.hp = this.data.hp;
+        this.maxHp = this.data.hp;
+        this.dmg = this.data.dmg;
+        this.speed = this.data.speed;
+        this.special = this.data.special;
+        this.x = state.w / 2;
+        this.y = 130;
+        this.vx = 0; this.vy = 0;
+        this.cd = 0;
+        this.flash = 0;
+        this.anim = 0;
+        this.specialTimer = 0;
+        this.phase = 0;
+        this.corpses = [];
+        this.scale = 3.5;
+        this.radius = 22;
+        this.isP = false;
+        this.def = { mass: 30 };
+        this.sprite = this.data.sprite.idle || this.data.sprite;
+        this.pal = this.data.palette;
+    }
+
+    update(dt) {
+        if(this.flash > 0) this.flash--;
+        if(this.cd > 0) this.cd -= dt;
+        this.specialTimer += dt;
+        this.anim += dt * 0.08;
 
         this.x += this.vx * dt;
         this.y += this.vy * dt;
         this.vx *= 0.85;
         this.vy *= 0.85;
 
-        let target = null;
-        let minD = 9999;
-
-        if(this.def.type === 'healer') {
-            state.units.filter(u => u.isP === this.isP && u !== this).forEach(a => {
-                if(a.hp < a.max && (a.hp / a.max) < minD) {
-                    minD = a.hp / a.max;
-                    target = a;
+        // フェーズ移行（カオスタイタン）
+        if(this.special === 'phases' && this.data.phases) {
+            const ratio = this.hp / this.maxHp;
+            for(let i = this.data.phases.length - 1; i >= 0; i--) {
+                if(ratio <= this.data.phases[i].hpThreshold && this.phase !== i) {
+                    this.phase = i;
+                    this.speed = this.data.speed * this.data.phases[i].speedMult;
+                    this.dmg = this.data.dmg * this.data.phases[i].damageMult;
+                    spawnPop(this.x, this.y - 60, `PHASE ${i + 1}!`, '#ef4444');
+                    addShake(8);
+                    break;
                 }
-            });
-            if(target) minD = Math.hypot(target.x - this.x, target.y - this.y);
-            else minD = 9999;
-        } else {
-            if(this.isP && state.boss && state.boss.hp > 0) {
-                target = state.boss;
-                minD = Math.hypot(target.x - this.x, target.y - this.y);
-            } else {
-                state.units.filter(u => u.isP !== this.isP).forEach(e => {
-                    const d = Math.hypot(e.x - this.x, e.y - this.y);
-                    if(d < minD) {
-                        minD = d;
-                        target = e;
-                    }
-                });
             }
         }
 
-        const atTarget = target && minD <= this.range;
+        // 最も近いプレイヤーユニットを狙い、いなければ拠点へ向かう
+        let target = null, bd = Infinity;
+        for(const u of state.units) {
+            if(!u.isP) continue;
+            const d = dist(u, this);
+            if(d < bd) { bd = d; target = u; }
+        }
+        if(!target || bd > 260) target = state.playerBase;
 
-        if(atTarget) {
-            if(this.cd <= 0) {
-                this.cd = this.rate;
-                this.attack(target);
-            }
-        } else if(target && minD < 300) {
-            const angle = Math.atan2(target.y - this.y, target.x - this.x);
-            this.x += Math.cos(angle) * effectiveSpeed * dt;
-            this.y += Math.sin(angle) * effectiveSpeed * dt;
-        } else {
-            // Move toward enemy base
-            const targetY = this.isP ? 40 : state.h - 40;
-            const dy = targetY - this.y;
-
-            if(Math.abs(dy) > 50) {
-                const angle = this.isP ? -Math.PI / 2 : Math.PI / 2;
-                this.x += Math.cos(angle) * effectiveSpeed * dt * 0.5;
-                this.y += Math.sin(angle) * effectiveSpeed * dt;
-            } else {
-                // Attack enemy base
+        if(target) {
+            const d = dist(target, this);
+            const reach = 42 + (target.radius || 0);
+            if(d <= reach) {
                 if(this.cd <= 0) {
-                    this.cd = this.rate;
-                    if(this.isP) {
-                        // Player unit attacking enemy base (shouldn't happen now)
-                    } else {
-                        // Enemy unit attacking player base
-                        state.pHP -= this.dmg;
-                        addShake(3);
-                        spawnPop(this.x, state.h - 40, this.dmg, '#ef4444');
-                        
-                        // Counter Strike upgrade
-                        if(state.upgrades.includes('counter')) {
-                            this.takeDmg(50, null);
-                            spawnPop(this.x, this.y, 'COUNTER!', '#fbbf24');
-                        }
-                    }
+                    this.cd = 60;
+                    target.takeDmg(this.dmg, this);
+                    addShake(5);
                 }
+            } else {
+                const a = Math.atan2(target.y - this.y, target.x - this.x);
+                this.x += Math.cos(a) * this.speed * dt;
+                this.y += Math.sin(a) * this.speed * dt;
             }
         }
 
-        state.units.forEach(u => {
-            if(u === this) return;
-            const d = Math.hypot(u.x - this.x, u.y - this.y);
-            if(d < 14) {
-                const a = Math.atan2(this.y - u.y, this.x - u.x);
-                const f = (14 - d) * 0.08;
-                this.x += Math.cos(a) * f;
-                this.y += Math.sin(a) * f;
-            }
-        });
+        this.useSpecial();
 
-        this.x = Math.max(20, Math.min(state.w - 20, this.x));
-        const margin = 50;
-        if(this.y < margin) this.y = margin;
-        if(this.y > state.h - margin) this.y = state.h - margin;
+        this.x = clamp(this.x, 34, state.w - 34);
+        this.y = clamp(this.y, 60, state.h - 70);
     }
 
-    attack(t) {
-        if(this.def.type === 'ranged' || this.def.type === 'aoe') {
-            state.projs.push({ x: this.x, y: this.y, t: t, dmg: this.dmg, def: this.def, isP: this.isP, owner: this, active: true });
-        } else {
-            t.takeDmg(this.dmg, this);
-            const a = Math.atan2(t.y - this.y, t.x - this.x);
-            const k = (this.def.kb / (t.def?.mass || 2)) * 2;
-            t.vx += Math.cos(a) * k;
-            t.vy += Math.sin(a) * k;
+    useSpecial() {
+        const d = this.data;
+        switch(this.special) {
+            case 'summon':
+                if(this.specialTimer > d.summonInterval) {
+                    this.specialTimer = 0;
+                    for(let i = 0; i < (d.summonCount || 2); i++) {
+                        const a = (Math.PI * 2 / d.summonCount) * i;
+                        state.units.push(new Unit(d.summonType, false,
+                            clamp(this.x + Math.cos(a) * 46, 20, state.w - 20),
+                            clamp(this.y + Math.sin(a) * 46, 60, state.h - 80)));
+                    }
+                    spawnPop(this.x, this.y - 60, 'SUMMON!', '#facc15');
+                }
+                break;
+
+            case 'teleport':
+                if(this.specialTimer > d.teleportInterval) {
+                    this.specialTimer = 0;
+                    for(let i = 0; i < 10; i++) {
+                        state.fx.push({ x:this.x, y:this.y - 20, vx:randRange(-3,3), vy:randRange(-3,3), life:20, color:'#a78bfa' });
+                    }
+                    this.x = randRange(50, state.w - 50);
+                    this.y = randRange(90, state.h * 0.6);
+                    spawnPop(this.x, this.y - 60, 'WARP!', '#a78bfa');
+                }
+                break;
+
+            case 'fire':
+                if(this.specialTimer > d.fireInterval) {
+                    this.specialTimer = 0;
+                    state.units.filter(u => u.isP && dist(u, this) < d.fireRadius)
+                        .forEach(u => u.takeDmg(d.fireDamage, this));
+                    spawnPop(this.x, this.y - 60, 'FLAME!', '#f97316');
+                    addShake(5);
+                    for(let i = 0; i < 14; i++) {
+                        const a = (Math.PI * 2 / 14) * i;
+                        state.fx.push({ x:this.x + Math.cos(a)*30, y:this.y - 18 + Math.sin(a)*30, vx:Math.cos(a)*2.5, vy:Math.sin(a)*2.5, life:26, color:'#f97316' });
+                    }
+                }
+                break;
+
+            case 'revive':
+                if(this.specialTimer > d.reviveInterval && this.corpses.length > 0) {
+                    this.specialTimer = 0;
+                    const n = Math.min(d.reviveCount || 2, this.corpses.length);
+                    for(let i = 0; i < n; i++) {
+                        const key = this.corpses.pop();
+                        state.units.push(new Unit(key, false,
+                            clamp(this.x + randRange(-40, 40), 20, state.w - 20),
+                            clamp(this.y + 36, 60, state.h - 80)));
+                    }
+                    spawnPop(this.x, this.y - 60, 'REVIVE!', '#a855f7');
+                }
+                break;
+
+            case 'laser':
+                if(this.specialTimer > d.laserInterval) {
+                    this.specialTimer = 0;
+                    const b = state.playerBase;
+                    state.units.filter(u => u.isP && Math.abs(u.x - b.x) < 34)
+                        .forEach(u => u.takeDmg(d.laserDamage, this));
+                    b.takeDmg(d.laserDamage, this);
+                    state.fx.push({ type:'laser', x1:this.x, y1:this.y - 18, x2:b.x, y2:b.y, life:22, color:'#60a5fa' });
+                    spawnPop(this.x, this.y - 60, 'LASER!', '#60a5fa');
+                    addShake(10);
+                }
+                break;
         }
     }
 
     takeDmg(v, attacker) {
+        if(this.hp <= 0) return;
+        if(this.special === 'armor') {
+            v *= this.data.armorReduction;
+            if(Math.random() < 0.25) spawnPop(this.x, this.y - 50, 'ARMOR!', '#d4d4d8');
+        }
         this.hp -= v;
         this.flash = 6;
-        spawnPop(this.x, this.y - 15, Math.floor(Math.abs(v)), v < 0 ? '#10b981' : '#fff');
+        spawnPop(this.x + randRange(-10, 10), this.y - 46, Math.floor(v), '#ffffff');
 
-        // Vampire healing
-        if(attacker && attacker.isP && state.upgrades.includes('vampire')) {
-            const heal = Math.abs(v) * 0.1;
-            attacker.hp = Math.min(attacker.max, attacker.hp + heal);
+        if(attacker && attacker.isP && vampireRate() > 0 && attacker.hp !== undefined) {
+            attacker.hp = Math.min(attacker.max, attacker.hp + v * vampireRate());
         }
 
-        // Thorns damage
-        if(attacker && this.isP && state.upgrades.includes('thorns')) {
-            const reflect = Math.abs(v) * 0.3;
-            attacker.takeDmg(reflect, null);
-        }
-
-        if(this.hp > this.max) this.hp = this.max;
-        
-        // Track dead enemies for necromancer
-        if(this.hp <= 0 && !this.isP && state.boss && state.boss.special === 'revive') {
-            state.boss.deadEnemies.push({key: this.key, x: this.x, y: this.y});
-            if(state.boss.deadEnemies.length > 10) {
-                state.boss.deadEnemies.shift();
+        if(this.hp <= 0) {
+            this.hp = 0;
+            state.kills++;
+            for(let i = 0; i < 24; i++) {
+                state.fx.push({ x:this.x, y:this.y - 24, vx:randRange(-4,4), vy:randRange(-5,1), life:40, color:'#fbbf24' });
             }
+            addShake(14);
+            state.boss = null;
+            state.bossCleared = true;
         }
     }
 
     draw(ctx) {
-        const s = this.key === 'giant' ? 3 : 2;
-        ctx.fillStyle = 'rgba(0,0,0,0.4)';
-        ctx.beginPath();
-        ctx.ellipse(this.x, this.y, 7 * s, 3 * s, 0, 0, Math.PI * 2);
-        ctx.fill();
+        const bounce = Math.abs(Math.sin(this.anim)) * 4;
 
-        const by = Math.abs(Math.sin(this.anim)) * 3;
+        // 影は本体の足元（スプライト下端）に合わせる
+        drawShadow(ctx, this.sprite, this.x, this.y, this.scale, 0.45);
+        drawSprite(ctx, this.sprite, this.pal, this.x, this.y - bounce, this.scale, {
+            flash: this.flash > 0,
+            flipX: false
+        });
 
-        ctx.save();
-        ctx.translate(this.x, this.y - by);
-        if(!this.isP) ctx.scale(1, -1);
-
-        const px = s;
-        const sprite = this.def.sprite;
-        ctx.translate(-7 * px, -12 * px);
-
-        for(let r = 0; r < 14; r++) {
-            for(let c = 0; c < 16; c++) {
-                const idx = sprite[r][c];
-                if(idx > 0) {
-                    ctx.fillStyle = this.flash > 0 ? '#fff' : this.pal[idx];
-                    ctx.fillRect(c * px, r * px, px, px);
-                }
-            }
-        }
-        ctx.restore();
-
-        const w = 24;
-        ctx.fillStyle = 'black';
-        ctx.fillRect(this.x - w / 2, this.y - 30, w, 4);
-        ctx.fillStyle = this.isP ? '#10b981' : '#ef4444';
-        ctx.fillRect(this.x - w / 2 + 1, this.y - 29, (w - 2) * (Math.max(0, this.hp) / this.max), 2);
+        const box = getSpriteBox(this.sprite);
+        const topY = this.y - bounce - box.h * this.scale - 10;
+        drawHpBar(ctx, this.x, topY, 84, 7, this.hp / this.maxHp, '#f59e0b');
     }
 }
 
-/**
- * --- SYSTEMS ---
- */
-function spawnPop(x, y, v, c) {
-    state.popups.push({ x, y, v, c, l: 1.0, z: 0 });
-}
-
-function addShake(v) {
-    state.shake = v;
-    if(navigator.vibrate) navigator.vibrate(v * 8);
-}
-
-function updateFX(dt) {
-    if(state.shake > 0) state.shake *= 0.9;
-    state.popups.forEach(p => {
-        p.z += 1;
-        p.l -= 0.02;
+// ============================================================
+// 戦術（購入済みならバトル中に自動発動する）
+// ============================================================
+function resetTactics() {
+    state.tacticTimers = {};
+    Object.keys(state.tactics).forEach(k => {
+        // 初回はクールダウンの半分で発動する
+        state.tacticTimers[k] = TACTIC_DEFS[k].cd * 60 * 0.5;
     });
-    state.popups = state.popups.filter(p => p.l > 0);
+}
 
-    state.fx.forEach(fx => {
-        if(fx.type === 'laser') {
-            fx.life--;
-        } else {
-            fx.x += fx.vx;
-            fx.y += fx.vy;
-            fx.life--;
+function updateTactics(dt) {
+    Object.keys(state.tactics).forEach(k => {
+        state.tacticTimers[k] -= dt;
+        if(state.tacticTimers[k] <= 0) {
+            state.tacticTimers[k] = TACTIC_DEFS[k].cd * 60;
+            fireTactic(k);
         }
     });
-    state.fx = state.fx.filter(fx => fx.life > 0);
+}
 
+function fireTactic(key) {
+    const def = TACTIC_DEFS[key];
+    spawnPop(state.w / 2, state.h * 0.42, def.name, '#fde68a');
+
+    switch(key) {
+        case 'meteor':
+            state.units.filter(u => !u.isP).forEach(u => u.takeDmg(120, null));
+            if(state.boss) state.boss.takeDmg(120, null);
+            addShake(10);
+            for(let i = 0; i < 22; i++) {
+                state.fx.push({ x:randRange(0, state.w), y:randRange(0, state.h * 0.5), vx:0, vy:5, life:26, color:'#f59e0b' });
+            }
+            break;
+
+        case 'heal':
+            state.units.filter(u => u.isP).forEach(u => {
+                const v = u.max * 0.35;
+                u.hp = Math.min(u.max, u.hp + v);
+                state.fx.push({ type:'heal', x:u.x, y:u.y - 10, life:26, color:'#34d399' });
+            });
+            state.playerBase.heal(state.playerBase.maxHp * 0.1);
+            break;
+
+        case 'timewarp':
+            state.timeWarp = 6 * 60;
+            break;
+
+        case 'angel': {
+            const lay = layout();
+            state.units.push(new Unit('angel', true, state.w / 2, lay.deployBottom - 20, { lifetime: 20 * 60 }));
+            break;
+        }
+    }
+}
+
+// ============================================================
+// 編成（ロスター）まわり
+// ============================================================
+// 編成データからバトル用ユニットを生成する
+function deployRoster() {
+    state.units = [];
+    state.roster.forEach(r => {
+        state.units.push(new Unit(r.key, true, r.x, r.y, { rid: r.id }));
+    });
+    state.aiRoster.forEach(r => {
+        state.units.push(new Unit(r.key, false, r.x, r.y, { rid: r.id }));
+    });
+}
+
+// 生き残ったユニットだけを編成に残す
+function syncRosterAfterBattle() {
+    const alive = new Set(state.units.filter(u => u.hp > 0).map(u => u.rid));
+    state.roster = state.roster.filter(r => alive.has(r.id));
+    state.aiRoster = state.aiRoster.filter(r => alive.has(r.id));
+}
+
+// AI の編成を組む（難易度プリセットに従って予算内で購入する）
+function buildAiRoster() {
+    const preset = AI_PRESETS[state.difficulty];
+    // 序盤にいきなり差がつかないよう、予算補正は数ラウンドかけて効いてくる
+    const ramp = 1 + (preset.budgetMult - 1) * Math.min(1, state.round / 3);
+    state.aiGold += Math.round(budgetForRound(state.round) * ramp);
+
+    const lay = layout();
+    let guard = 200;
+    while(guard-- > 0 && state.aiRoster.length < MAX_UNITS) {
+        const affordable = preset.pool.filter(p => UNIT_DEFS[p.key].cost <= state.aiGold);
+        if(affordable.length === 0) break;
+
+        // ウェイト付き抽選
+        const total = affordable.reduce((s, p) => s + p.w, 0);
+        let r = Math.random() * total;
+        let pick = affordable[affordable.length - 1];
+        for(const p of affordable) { r -= p.w; if(r <= 0) { pick = p; break; } }
+
+        state.aiGold -= UNIT_DEFS[pick.key].cost;
+        // 近接・タンクは前列、遠距離・回復は後列に配置する
+        const t = UNIT_DEFS[pick.key].type;
+        const isFront = (t === 'melee' || t === 'tank');
+        const band = lay.enemyBottom - lay.enemyTop;
+        state.aiRoster.push({
+            id: state.nextId++,
+            key: pick.key,
+            x: randRange(28, state.w - 28),
+            y: isFront
+                ? randRange(lay.enemyTop + band * 0.55, lay.enemyBottom)
+                : randRange(lay.enemyTop, lay.enemyTop + band * 0.45)
+        });
+    }
+
+    // 配置上限に達して予算が余った場合は編成強化に回す（プレイヤーの「強化」に相当）
+    while(state.aiGold >= AI_POWER_UNIT) {
+        state.aiGold -= AI_POWER_UNIT;
+        state.aiPower = (state.aiPower || 1) * AI_POWER_GAIN;
+    }
+}
+
+// AI 編成の配置を画面サイズに合わせて収める
+function clampRosters() {
+    const lay = layout();
+    state.roster.forEach(r => {
+        r.x = clamp(r.x, 16, state.w - 16);
+        r.y = clamp(r.y, lay.deployTop, lay.deployBottom);
+    });
+    state.aiRoster.forEach(r => {
+        r.x = clamp(r.x, 16, state.w - 16);
+        r.y = clamp(r.y, lay.enemyTop, lay.enemyBottom);
+    });
+}
+
+// ============================================================
+// シーン制御
+// ============================================================
+function showScreen(id) {
+    ['screen-title', 'screen-mode', 'screen-result'].forEach(s => {
+        document.getElementById(s).classList.toggle('show', s === id);
+    });
+}
+function hideScreens() { showScreen(''); }
+
+// 準備フェーズへ
+function enterPrep() {
+    state.scene = 'prep';
+    state.selected = null;
+    state.drag = null;
+    state.boss = null;
+    state.bossCleared = false;
+    state.units = [];
+    state.projs = [];
+    state.fx = [];
+    state.popups = [];
+    state.timeWarp = 0;
+    state.kills = 0;
+    state.speed = 1;
+
+    // 拠点は毎ラウンド全回復した状態で始まる
+    state.playerBase = new Base(true);
+    state.enemyBase = (state.mode === 'battle') ? new Base(false) : null;
+
+    if(state.mode === 'battle') buildAiRoster();
+    clampRosters();
+
+    // やり直し用のスナップショットを保存
+    state.snapshot = JSON.stringify({
+        round: state.round, gold: state.gold,
+        roster: state.roster, aiRoster: state.aiRoster, aiGold: state.aiGold,
+        aiPower: state.aiPower,
+        upgrades: state.upgrades, tactics: state.tactics, nextId: state.nextId
+    });
+
+    hideScreens();
+    document.getElementById('prep-panel').style.display = '';
+    document.getElementById('battle-panel').style.display = 'none';
+    resize();
+    renderShop();
+    updatePrepUI();
+    updateHud();
+    saveGame();
+}
+
+// バトルフェーズへ
+function startBattle() {
+    if(state.roster.length === 0) {
+        toast('ユニットを1体以上配置してください');
+        return;
+    }
+
+    state.scene = 'battle';
+    state.selected = null;
+    state.drag = null;
+    state.kills = 0;
+    deployRoster();
+    resetTactics();
+
+    if(state.mode === 'story') {
+        const conf = WAVE_CONFIGS[state.round];
+        state.spawnQueue = conf.enemyWaves.map(w => ({
+            delay: w.delay,
+            enemies: w.enemies.map(e => ({ type: e.type, count: e.count }))
+        }));
+        state.spawnTimer = 0;
+        state.bossDelay = -1;
+        state.battleTimer = 150 * 60;
+    } else {
+        state.spawnQueue = [];
+        state.battleTimer = 90 * 60;
+    }
+
+    document.getElementById('prep-panel').style.display = 'none';
+    document.getElementById('battle-panel').style.display = 'flex';
+    resize();
+    setSpeed(1);
+    updateHud();
+}
+
+// バトル終了 → 結果表示
+function endBattle(win, reason) {
+    if(state.scene !== 'battle') return;
+    state.scene = 'result';
+    syncRosterAfterBattle();
+
+    const isFinalStory = (state.mode === 'story' && win && state.round >= STORY_LAST_WAVE);
+    state.result = { win, reason, isFinalStory };
+
+    // 勝利時は次ラウンドの予算を配布する
+    if(win) {
+        if(isFinalStory) {
+            deleteSave();
+        } else {
+            state.round++;
+            state.gold += budgetForRound(state.round);
+        }
+    }
+
+    showResultScreen();
+}
+
+function showResultScreen() {
+    const r = state.result;
+    const title = document.getElementById('result-title');
+    const msg = document.getElementById('result-msg');
+    const stats = document.getElementById('result-stats');
+    const btnNext = document.getElementById('btn-result-next');
+    const btnRetry = document.getElementById('btn-result-retry');
+
+    const survivors = state.roster.length;
+    const baseRatio = Math.round((state.playerBase.hp / state.playerBase.maxHp) * 100);
+
+    if(r.isFinalStory) {
+        title.textContent = 'ALL CLEAR';
+        title.className = 'result-title win';
+        msg.textContent = '全7ステージ制覇！ 見事な采配だ。';
+    } else if(r.win) {
+        title.textContent = 'VICTORY';
+        title.className = 'result-title win';
+        msg.textContent = state.mode === 'story'
+            ? `WAVE ${state.round - 1} クリア！`
+            : `ROUND ${state.round - 1} 勝利！`;
+    } else {
+        title.textContent = 'DEFEAT';
+        title.className = 'result-title lose';
+        msg.textContent = r.reason || '拠点が破壊された';
+    }
+
+    const rows = [
+        ['撃破数', `${state.kills}`],
+        ['生き残り', `${survivors} 体`],
+        ['拠点HP', `${baseRatio}%`]
+    ];
+    if(r.win && !r.isFinalStory) rows.push(['次の予算', `${state.gold}G`]);
+    stats.innerHTML = rows.map(x =>
+        `<div class="result-row"><span>${x[0]}</span><span>${x[1]}</span></div>`).join('');
+
+    btnNext.style.display = (r.win && !r.isFinalStory) ? '' : 'none';
+    btnNext.textContent = state.mode === 'story' ? 'ショップへ' : '次のラウンドへ';
+    btnRetry.style.display = r.isFinalStory ? 'none' : '';
+    btnRetry.textContent = r.win ? 'このラウンドをやり直す' : 'もう一度挑戦する';
+
+    document.getElementById('prep-panel').style.display = 'none';
+    document.getElementById('battle-panel').style.display = 'none';
+    showScreen('screen-result');
+}
+
+// ラウンドをやり直す（準備フェーズ開始時の状態に戻す）
+function retryRound() {
+    if(!state.snapshot) return;
+    const s = JSON.parse(state.snapshot);
+    state.round = s.round;
+    state.gold = s.gold;
+    state.roster = s.roster;
+    state.aiRoster = s.aiRoster;
+    state.aiGold = s.aiGold;
+    state.aiPower = s.aiPower || 1;
+    state.upgrades = s.upgrades;
+    state.tactics = s.tactics;
+    state.nextId = s.nextId;
+
+    // enterPrep で AI 編成を再抽選しないように、このラウンド分は購入済み扱いにする
+    state.scene = 'prep';
+    state.selected = null;
+    state.units = [];
+    state.projs = [];
+    state.fx = [];
+    state.popups = [];
+    state.boss = null;
+    state.bossCleared = false;
+    state.timeWarp = 0;
+    state.kills = 0;
+    state.playerBase = new Base(true);
+    state.enemyBase = (state.mode === 'battle') ? new Base(false) : null;
+    clampRosters();
+
+    hideScreens();
+    document.getElementById('prep-panel').style.display = '';
+    document.getElementById('battle-panel').style.display = 'none';
+    resize();
+    renderShop();
+    updatePrepUI();
+    updateHud();
+}
+
+// 新規ゲーム開始
+function startNewGame(mode) {
+    state.mode = mode;
+    state.round = 1;
+    state.gold = budgetForRound(1);
+    state.roster = [];
+    state.aiRoster = [];
+    state.aiGold = 0;
+    state.aiPower = 1;
+    state.nextId = 1;
+    state.upgrades = {};
+    state.tactics = {};
+    deleteSave();
+    enterPrep();
+    toast(mode === 'story' ? 'STORY モード開始' : `AI 対戦（${AI_PRESETS[state.difficulty].label}）開始`);
+}
+
+function backToTitle() {
+    state.scene = 'title';
+    state.units = [];
+    state.projs = [];
+    state.fx = [];
+    state.popups = [];
+    state.boss = null;
+    document.getElementById('prep-panel').style.display = '';
+    document.getElementById('battle-panel').style.display = 'none';
+    document.getElementById('btn-continue').style.display = hasSave() ? '' : 'none';
+    showScreen('screen-title');
+}
+
+// ============================================================
+// セーブ / ロード
+// ============================================================
+function saveGame() {
+    try {
+        localStorage.setItem(SAVE_KEY, JSON.stringify({
+            mode: state.mode, difficulty: state.difficulty,
+            round: state.round, gold: state.gold,
+            roster: state.roster, aiRoster: state.aiRoster, aiGold: state.aiGold,
+            aiPower: state.aiPower,
+            upgrades: state.upgrades, tactics: state.tactics, nextId: state.nextId
+        }));
+    } catch(e) { /* 保存できない環境では何もしない */ }
+}
+
+function hasSave() {
+    try { return !!localStorage.getItem(SAVE_KEY); } catch(e) { return false; }
+}
+
+function deleteSave() {
+    try { localStorage.removeItem(SAVE_KEY); } catch(e) { /* 無視 */ }
+}
+
+function loadGame() {
+    try {
+        const raw = localStorage.getItem(SAVE_KEY);
+        if(!raw) { toast('セーブデータがありません'); return; }
+        const s = JSON.parse(raw);
+        state.mode = s.mode;
+        state.difficulty = s.difficulty || 'normal';
+        state.round = s.round;
+        state.gold = s.gold;
+        state.roster = s.roster || [];
+        state.aiRoster = s.aiRoster || [];
+        state.aiGold = s.aiGold || 0;
+        state.aiPower = s.aiPower || 1;
+        state.upgrades = s.upgrades || {};
+        state.tactics = s.tactics || {};
+        state.nextId = s.nextId || 1;
+
+        // セーブ地点は準備フェーズの開始時。AI 編成は再抽選しない
+        state.scene = 'prep';
+        state.selected = null;
+        state.units = [];
+        state.projs = [];
+        state.fx = [];
+        state.popups = [];
+        state.boss = null;
+        state.bossCleared = false;
+        state.playerBase = new Base(true);
+        state.enemyBase = (state.mode === 'battle') ? new Base(false) : null;
+        clampRosters();
+
+        state.snapshot = JSON.stringify({
+            round: state.round, gold: state.gold,
+            roster: state.roster, aiRoster: state.aiRoster, aiGold: state.aiGold,
+            upgrades: state.upgrades, tactics: state.tactics, nextId: state.nextId
+        });
+
+        hideScreens();
+        document.getElementById('prep-panel').style.display = '';
+        document.getElementById('battle-panel').style.display = 'none';
+        renderShop();
+        updatePrepUI();
+        updateHud();
+        toast('つづきから再開しました');
+    } catch(e) {
+        toast('セーブデータを読み込めませんでした');
+    }
+}
+
+// ============================================================
+// ショップ UI
+// ============================================================
+function unitIconCanvas(key) {
+    const def = UNIT_DEFS[key];
+    const c = document.createElement('canvas');
+    c.className = 'card-icon';
+    c.width = 40; c.height = 40;
+    const g = c.getContext('2d');
+    const box = getSpriteBox(def.sprite);
+    const s = Math.floor(Math.min(40 / box.w, 40 / box.h));
+    const ox = (40 - box.w * s) / 2 - box.minC * s;
+    const oy = (40 - box.h * s) / 2 - box.minR * s;
+    for(let r = box.minR; r <= box.maxR; r++) {
+        for(let col = box.minC; col <= box.maxC; col++) {
+            const idx = def.sprite[r][col];
+            if(idx > 0) {
+                g.fillStyle = def.pal[idx];
+                g.fillRect(ox + col * s, oy + r * s, s, s);
+            }
+        }
+    }
+    return c;
+}
+
+function renderShop() {
+    const list = document.getElementById('shop-list');
+    list.innerHTML = '';
+
+    if(state.shopTab === 'units') {
+        const legend = document.createElement('div');
+        legend.className = 'shop-legend';
+        legend.textContent = 'ATK SPD は攻撃間隔（秒）。低いほど速い。';
+        list.appendChild(legend);
+
+        SHOP_UNITS.forEach(key => {
+            const def = UNIT_DEFS[key];
+            const card = document.createElement('div');
+            card.className = 'shop-card';
+            card.dataset.key = key;
+
+            const owned = state.roster.filter(r => r.key === key).length;
+            const main = document.createElement('div');
+            main.className = 'card-main';
+            main.innerHTML = `
+                <div class="card-top">
+                    <span class="card-name">${def.name}</span>
+                    <span class="card-type">${TYPE_LABELS[def.type]}</span>
+                    ${owned ? `<span class="card-own">×${owned}</span>` : ''}
+                    <span class="card-cost">${def.cost}G</span>
+                </div>
+                <div class="card-stats">
+                    <span><b>HP</b>${def.hp}</span>
+                    <span><b>ATK</b>${def.dmg < 0 ? '回復' + Math.abs(def.dmg) : def.dmg}</span>
+                    <span><b>ATK SPD</b>${(def.rate / 60).toFixed(2)}s</span>
+                    <span><b>MOV</b>${Math.round(def.speed * 100)}</span>
+                    <span><b>RANGE</b>${def.range}</span>
+                    <span><b>TYPE</b>${TYPE_LABELS[def.type]}</span>
+                </div>
+                <div class="card-comment">${def.comment}</div>`;
+
+            card.appendChild(unitIconCanvas(key));
+            card.appendChild(main);
+            card.addEventListener('click', () => selectShopUnit(key));
+            list.appendChild(card);
+        });
+
+    } else if(state.shopTab === 'upgrades') {
+        const legend = document.createElement('div');
+        legend.className = 'shop-legend';
+        legend.textContent = '強化は永続効果。購入するたびに価格が上がります。';
+        list.appendChild(legend);
+
+        Object.keys(UPGRADE_DEFS).forEach(key => {
+            const def = UPGRADE_DEFS[key];
+            const price = upgradePrice(key);
+            const owned = upCount(key);
+            const card = document.createElement('div');
+            card.className = 'shop-card';
+            card.dataset.upgrade = key;
+            card.innerHTML = `
+                <div class="card-emoji">${def.icon}</div>
+                <div class="card-main">
+                    <div class="card-top">
+                        <span class="card-name">${def.name}</span>
+                        ${owned ? `<span class="card-own">Lv.${owned}</span>` : ''}
+                        <span class="card-cost">${price}G</span>
+                    </div>
+                    <div class="card-comment">${def.desc}</div>
+                </div>`;
+            card.addEventListener('click', () => buyUpgrade(key));
+            list.appendChild(card);
+        });
+
+    } else {
+        const legend = document.createElement('div');
+        legend.className = 'shop-legend';
+        legend.textContent = 'バトル中は操作できないため、戦術は自動で発動します。';
+        list.appendChild(legend);
+
+        Object.keys(TACTIC_DEFS).forEach(key => {
+            const def = TACTIC_DEFS[key];
+            const owned = !!state.tactics[key];
+            const card = document.createElement('div');
+            card.className = 'shop-card';
+            card.dataset.tactic = key;
+            card.innerHTML = `
+                <div class="card-emoji">${def.icon}</div>
+                <div class="card-main">
+                    <div class="card-top">
+                        <span class="card-name">${def.name}</span>
+                        ${owned ? '<span class="card-own">習得済み</span>' : ''}
+                        <span class="card-cost">${owned ? '—' : def.cost + 'G'}</span>
+                    </div>
+                    <div class="card-comment">${def.desc}</div>
+                    <div class="card-note">クールダウン ${def.cd}秒ごとに自動発動</div>
+                </div>`;
+            card.addEventListener('click', () => buyTactic(key));
+            list.appendChild(card);
+        });
+    }
+
+    updatePrepUI();
+}
+
+function selectShopUnit(key) {
+    const def = UNIT_DEFS[key];
+    if(state.roster.length >= MAX_UNITS) { toast(`配置できるのは ${MAX_UNITS} 体までです`); return; }
+    if(state.gold < def.cost) { toast('ゴールドが足りません'); return; }
+    state.selected = (state.selected === key) ? null : key;
+    if(state.selected) toast(`${def.name} を配置エリアにタップで配置`);
+    updatePrepUI();
+}
+
+function buyUpgrade(key) {
+    const price = upgradePrice(key);
+    if(state.gold < price) { toast('ゴールドが足りません'); return; }
+    state.gold -= price;
+    state.upgrades[key] = upCount(key) + 1;
+
+    // 拠点強化はその場で反映する
+    if(key === 'fortified') {
+        state.playerBase.maxHp += 400;
+        state.playerBase.hp += 400;
+    }
+    toast(`${UPGRADE_DEFS[key].name} を購入`);
+    renderShop();
+    saveGame();
+}
+
+function buyTactic(key) {
+    if(state.tactics[key]) { toast('すでに習得しています'); return; }
+    const def = TACTIC_DEFS[key];
+    if(state.gold < def.cost) { toast('ゴールドが足りません'); return; }
+    state.gold -= def.cost;
+    state.tactics[key] = true;
+    toast(`${def.name} を習得`);
+    renderShop();
+    saveGame();
+}
+
+function updatePrepUI() {
+    document.getElementById('gold-val').textContent = state.gold;
+    const dep = document.getElementById('deploy-box');
+    dep.textContent = `配置 ${state.roster.length}/${MAX_UNITS}`;
+    dep.classList.toggle('full', state.roster.length >= MAX_UNITS);
+
+    document.querySelectorAll('#shop-list .shop-card').forEach(card => {
+        const key = card.dataset.key;
+        if(key) {
+            card.classList.toggle('selected', state.selected === key);
+            card.classList.toggle('cant-buy', state.gold < UNIT_DEFS[key].cost || state.roster.length >= MAX_UNITS);
+        } else if(card.dataset.upgrade) {
+            card.classList.toggle('cant-buy', state.gold < upgradePrice(card.dataset.upgrade));
+        } else if(card.dataset.tactic) {
+            const t = card.dataset.tactic;
+            card.classList.toggle('cant-buy', !state.tactics[t] && state.gold < TACTIC_DEFS[t].cost);
+        }
+    });
+
+    document.getElementById('btn-start-battle').disabled = state.roster.length === 0;
+}
+
+function setTab(tab) {
+    state.shopTab = tab;
+    document.getElementById('tab-units').classList.toggle('active', tab === 'units');
+    document.getElementById('tab-upgrades').classList.toggle('active', tab === 'upgrades');
+    document.getElementById('tab-tactics').classList.toggle('active', tab === 'tactics');
+    state.selected = null;
+    renderShop();
+}
+
+// 配置済みユニットを全て売却して予算に戻す
+function clearRoster() {
+    if(state.roster.length === 0) { toast('配置中のユニットはいません'); return; }
+    let refund = 0;
+    state.roster.forEach(r => { refund += UNIT_DEFS[r.key].cost; });
+    state.gold += refund;
+    state.roster = [];
+    state.selected = null;
+    toast(`全ユニットを売却 (+${refund}G)`);
+    renderShop();
+    saveGame();
+}
+
+// ============================================================
+// 入力（準備フェーズのみ操作可能）
+// ============================================================
+function canvasPos(e) {
+    const r = canvas.getBoundingClientRect();
+    return {
+        x: (e.clientX - r.left) * (state.w / r.width),
+        y: (e.clientY - r.top) * (state.h / r.height)
+    };
+}
+
+function rosterAt(x, y) {
+    let hit = null, bd = 22;
+    state.roster.forEach(r => {
+        const d = Math.hypot(r.x - x, r.y - y - 10);
+        if(d < bd) { bd = d; hit = r; }
+    });
+    return hit;
+}
+
+function onPointerDown(e) {
+    if(state.scene !== 'prep') return;
+    const p = canvasPos(e);
+    const lay = layout();
+
+    // ユニット選択中 → 配置
+    if(state.selected) {
+        const def = UNIT_DEFS[state.selected];
+        if(p.y < lay.deployTop || p.y > lay.deployBottom) {
+            toast('緑色の配置エリア内をタップしてください');
+            return;
+        }
+        if(state.gold < def.cost) { toast('ゴールドが足りません'); state.selected = null; updatePrepUI(); return; }
+        if(state.roster.length >= MAX_UNITS) { toast(`配置できるのは ${MAX_UNITS} 体までです`); return; }
+
+        state.gold -= def.cost;
+        state.roster.push({
+            id: state.nextId++,
+            key: state.selected,
+            x: clamp(p.x, 16, state.w - 16),
+            y: clamp(p.y, lay.deployTop, lay.deployBottom)
+        });
+        if(state.gold < def.cost) state.selected = null; // もう買えないなら選択解除
+        renderShop();
+        saveGame();
+        return;
+    }
+
+    // 配置済みユニットを掴む（ドラッグで移動 / タップで売却）
+    const hit = rosterAt(p.x, p.y);
+    if(hit) {
+        state.drag = { entry: hit, moved: false, startX: p.x, startY: p.y };
+        canvas.setPointerCapture && canvas.setPointerCapture(e.pointerId);
+    }
+}
+
+function onPointerMove(e) {
+    if(state.scene !== 'prep' || !state.drag) return;
+    const p = canvasPos(e);
+    const lay = layout();
+    if(Math.hypot(p.x - state.drag.startX, p.y - state.drag.startY) > 6) state.drag.moved = true;
+    if(state.drag.moved) {
+        state.drag.entry.x = clamp(p.x, 16, state.w - 16);
+        state.drag.entry.y = clamp(p.y, lay.deployTop, lay.deployBottom);
+    }
+}
+
+function onPointerUp() {
+    if(state.scene !== 'prep' || !state.drag) return;
+    const d = state.drag;
+    state.drag = null;
+
+    if(!d.moved) {
+        // タップした配置ユニットを売却して予算に戻す
+        const def = UNIT_DEFS[d.entry.key];
+        state.roster = state.roster.filter(r => r !== d.entry);
+        state.gold += def.cost;
+        toast(`${def.name} を売却 (+${def.cost}G)`);
+        renderShop();
+    }
+    saveGame();
+}
+
+// ============================================================
+// バトル進行
+// ============================================================
+function spawnEnemyGroup(group) {
+    const lay = layout();
+    group.enemies.forEach(g => {
+        for(let i = 0; i < g.count; i++) {
+            state.units.push(new Unit(g.type, false,
+                randRange(26, state.w - 26),
+                randRange(lay.enemyTop, lay.enemyBottom)));
+        }
+    });
+    spawnPop(state.w / 2, lay.enemyBottom + 20, 'ENEMY WAVE!', '#ef4444');
+    addShake(3);
+}
+
+function updateSpawner(dt) {
+    if(state.mode !== 'story') return;
+
+    if(state.spawnQueue.length > 0) {
+        state.spawnTimer += dt;
+        if(state.spawnTimer >= state.spawnQueue[0].delay) {
+            state.spawnTimer = 0;
+            spawnEnemyGroup(state.spawnQueue.shift());
+        }
+        return;
+    }
+
+    // 雑魚を全滅させたらボスが出現する
+    if(!state.boss && !state.bossCleared && state.bossDelay < 0) {
+        if(state.units.filter(u => !u.isP).length === 0) state.bossDelay = 60;
+    }
+    if(state.bossDelay > 0) {
+        state.bossDelay -= dt;
+        if(state.bossDelay <= 0) {
+            state.bossDelay = -1;
+            state.boss = new Boss(state.round);
+            spawnPop(state.w / 2, 150, 'BOSS APPEARS!', '#f59e0b');
+            addShake(10);
+            updateHud();
+        }
+    }
+}
+
+function updateProjectiles(dt) {
     state.projs.forEach(p => {
         if(!p.active) return;
-        const dx = p.t.x - p.x, dy = p.t.y - p.y;
+        const t = p.target;
+        // 対象が消えた場合は着弾扱いにする
+        if(!t || t.hp <= 0) { p.active = false; return; }
+
+        const dx = t.x - p.x, dy = (t.y - 12) - p.y;
         const d = Math.hypot(dx, dy);
-        if(d < 10 || p.t.hp <= 0) {
+        if(d < 9) {
             p.active = false;
             if(p.def.type === 'aoe') {
                 state.units.forEach(u => {
                     if(u.isP !== p.isP && Math.hypot(u.x - p.x, u.y - p.y) < p.def.splash) {
                         u.takeDmg(p.dmg, p.owner);
                         const a = Math.atan2(u.y - p.y, u.x - p.x);
-                        u.vx += Math.cos(a) * 5;
-                        u.vy += Math.sin(a) * 5;
+                        u.vx += Math.cos(a) * 3;
+                        u.vy += Math.sin(a) * 3;
                     }
                 });
-                if(state.boss && Math.hypot(state.boss.x - p.x, state.boss.y - p.y) < p.def.splash) {
+                if(p.isP && state.boss && Math.hypot(state.boss.x - p.x, state.boss.y - p.y) < p.def.splash) {
                     state.boss.takeDmg(p.dmg, p.owner);
+                }
+                const foeBase = p.isP ? state.enemyBase : state.playerBase;
+                if(foeBase && Math.hypot(foeBase.x - p.x, foeBase.y - p.y) < p.def.splash) {
+                    foeBase.takeDmg(p.dmg, p.owner);
+                }
+                for(let i = 0; i < 8; i++) {
+                    const a = (Math.PI * 2 / 8) * i;
+                    state.fx.push({ x:p.x, y:p.y, vx:Math.cos(a)*2.5, vy:Math.sin(a)*2.5, life:18, color:'#f59e0b' });
                 }
                 addShake(2);
             } else {
-                p.t.takeDmg(p.dmg, p.owner);
+                t.takeDmg(p.dmg, p.owner);
             }
         } else {
-            p.x += (dx / d) * 7;
-            p.y += (dy / d) * 7;
+            const sp = 7 * dt;
+            p.x += (dx / d) * sp;
+            p.y += (dy / d) * sp;
         }
     });
     state.projs = state.projs.filter(p => p.active);
-
-    // Base regeneration
-    if(state.baseRegen > 0) {
-        state.pHP = Math.min(state.maxHP, state.pHP + state.baseRegen / 60);
-    }
-    
-    // Time warp effect
-    if(state.timeWarpActive) {
-        state.timeWarpTimer--;
-        if(state.timeWarpTimer <= 0) {
-            state.timeWarpActive = false;
-        }
-    }
-    
-    // Mana surge effect
-    if(state.manaSurgeActive) {
-        state.manaSurgeTimer--;
-        if(state.manaSurgeTimer <= 0) {
-            state.manaSurgeActive = false;
-        }
-    }
 }
 
-/**
- * --- WAVE SPAWNER ---
- */
-function spawnEnemyWave(waveConfig) {
-    const spawnY = 80; // Spawn near top
-    const spawnWidth = state.w - 100;
-    const spawnCenterX = state.w / 2;
-    
-    waveConfig.enemies.forEach(enemyGroup => {
-        const { type, count } = enemyGroup;
-        const def = UNIT_DEFS[type];
-        
-        for(let i = 0; i < count; i++) {
-            const spreadX = (Math.random() - 0.5) * spawnWidth;
-            const spreadY = Math.random() * 40;
-            
-            const enemy = {
-                key: type,
-                def: def,
-                isP: false,
-                x: spawnCenterX + spreadX,
-                y: spawnY + spreadY,
-                hp: def.hp,
-                max: def.hp,
-                dmg: def.dmg,
-                speed: def.speed,
-                rate: def.rate,
-                range: def.range,
-                cd: 0,
-                vx: 0, vy: 0,
-                anim: Math.random() * 10,
-                flash: 0,
-                pal: PALETTES[type],
-                update: Unit.prototype.update,
-                attack: Unit.prototype.attack,
-                takeDmg: Unit.prototype.takeDmg,
-                draw: Unit.prototype.draw
-            };
-            state.units.push(enemy);
+function updateFx(dt) {
+    if(state.shake > 0.1) state.shake *= 0.88; else state.shake = 0;
+
+    state.popups.forEach(p => { p.rise += dt; p.life -= 0.018 * dt; });
+    state.popups = state.popups.filter(p => p.life > 0);
+
+    state.fx.forEach(f => {
+        if(f.type === 'laser' || f.type === 'heal') { f.life -= dt; return; }
+        f.x += f.vx * dt;
+        f.y += f.vy * dt;
+        f.vy += 0.06 * dt;
+        f.life -= dt;
+    });
+    state.fx = state.fx.filter(f => f.life > 0);
+}
+
+// バトル 1 フレーム分の更新
+function updateBattle(dt) {
+    updateSpawner(dt);
+    updateTactics(dt);
+    if(state.timeWarp > 0) state.timeWarp -= dt;
+
+    state.units.forEach(u => {
+        u.update(dt);
+        if(u.lifetime > 0) {
+            u.lifetime -= dt;
+            if(u.lifetime <= 0) { u.hp = 0; onUnitDeath(u); }
         }
     });
+
+    if(state.boss) state.boss.update(dt);
+    updateProjectiles(dt);
+    updateFx(dt);
+
+    state.playerBase.update();
+    if(state.enemyBase) state.enemyBase.update();
+
+    // 拠点の自動修復
+    if(baseRegen() > 0) state.playerBase.heal(baseRegen() / 60 * dt);
+
+    // 死亡したユニットを取り除く（編成同期のため実体は残さない）
+    state.units = state.units.filter(u => u.hp > 0);
+
+    state.battleTimer -= dt;
+    checkBattleEnd();
 }
 
-function updateWaveSpawner(dt) {
-    if(!state.waveSpawner || state.boss) return;
-    
-    state.spawnTimer += dt;
-    
-    const currentWave = state.waveSpawner[state.currentWaveIndex];
-    if(!currentWave) {
-        // All waves spawned, wait for enemies to be cleared
-        state.waitingForBoss = true;
-        return;
-    }
-    
-    if(state.spawnTimer >= currentWave.delay) {
-        state.spawnTimer = 0;
-        spawnEnemyWave(currentWave);
-        state.currentWaveIndex++;
-        
-        // Visual feedback
-        spawnPop(state.w / 2, 100, 'ENEMY WAVE!', '#ef4444');
-        addShake(3);
-    }
-}
+function checkBattleEnd() {
+    if(state.scene !== 'battle') return;
 
-function checkBossSpawn() {
-    if(state.waitingForBoss && !state.boss) {
-        // Check if all enemies are cleared
-        const enemiesAlive = state.units.filter(u => !u.isP).length;
-        if(enemiesAlive === 0) {
-            state.waitingForBoss = false;
-            setTimeout(() => {
-                spawnBoss(state.wave);
-                spawnPop(state.w / 2, 100, 'BOSS APPEARS!', '#f59e0b');
-                addShake(8);
-            }, 1000);
+    if(state.playerBase.hp <= 0) { endBattle(false, '自拠点が破壊された'); return; }
+
+    if(state.mode === 'story') {
+        if(state.bossCleared) { endBattle(true); return; }
+        if(state.battleTimer <= 0) { endBattle(false, '制限時間内に討伐できなかった'); return; }
+    } else {
+        if(state.enemyBase.hp <= 0) { endBattle(true); return; }
+        if(state.battleTimer <= 0) {
+            const mine = state.playerBase.hp / state.playerBase.maxHp;
+            const foe = state.enemyBase.hp / state.enemyBase.maxHp;
+            if(mine > foe) endBattle(true);
+            else endBattle(false, '時間切れ（拠点HPで判定負け）');
+            return;
         }
     }
 }
 
-/**
- * --- SKILL SYSTEM ---
- */
-function useSkill() {
-    if(!state.skill || state.skill.cooldown > 0) return;
+// ============================================================
+// 画面上部の情報表示
+// ============================================================
+function updateHud() {
+    const left = document.getElementById('hud-left');
+    const boss = document.getElementById('hud-boss');
+    const right = document.getElementById('hud-right');
 
-    state.skill.cooldown = state.skill.maxCooldown;
-
-    switch(state.skill.id) {
-        case 'meteor':
-            state.units.filter(u => !u.isP).forEach(u => u.takeDmg(150, null));
-            if(state.boss) state.boss.takeDmg(150, null);
-            addShake(10);
-            spawnPop(state.w / 2, state.h / 2, 'METEOR!', '#f59e0b');
-            
-            // Visual effect
-            for(let i = 0; i < 20; i++) {
-                state.fx.push({
-                    x: Math.random() * state.w,
-                    y: Math.random() * state.h / 2,
-                    vx: 0,
-                    vy: 5,
-                    life: 30,
-                    color: '#f59e0b'
-                });
-            }
-            break;
-
-        case 'judgment':
-            const cx = state.w / 2, cy = state.h / 2;
-            state.units.filter(u => !u.isP && Math.hypot(u.x - cx, u.y - cy) < 120).forEach(u => {
-                u.takeDmg(400, null);
-            });
-            if(state.boss && Math.hypot(state.boss.x - cx, state.boss.y - cy) < 120) {
-                state.boss.takeDmg(400, null);
-            }
-            addShake(8);
-            spawnPop(cx, cy, 'JUDGMENT!', '#fbbf24');
-            
-            // Visual effect
-            for(let i = 0; i < 16; i++) {
-                const angle = (Math.PI * 2 / 16) * i;
-                state.fx.push({
-                    x: cx,
-                    y: cy,
-                    vx: Math.cos(angle) * 5,
-                    vy: Math.sin(angle) * 5,
-                    life: 40,
-                    color: '#fbbf24'
-                });
-            }
-            break;
-
-        case 'heal':
-            state.units.filter(u => u.isP).forEach(u => {
-                u.hp = u.max;
-                spawnPop(u.x, u.y, 'HEAL', '#10b981');
-            });
-            state.pHP = Math.min(state.maxHP, state.pHP + 400);
-            spawnPop(state.w / 2, state.h - 40, '+400', '#10b981');
-            break;
-
-        case 'timewarp':
-            state.timeWarpActive = true;
-            state.timeWarpTimer = 8 * 60; // 8 seconds at 60fps
-            spawnPop(state.w / 2, state.h / 2, 'TIME WARP!', '#60a5fa');
-            break;
-
-        case 'angel':
-            state.units.push({
-                key: 'angel',
-                def: { hp: 800, dmg: 70, range: 120, speed: 0.8, rate: 40, type: 'ranged', mass: 2, kb: 5, sprite: SPRITES.angel },
-                isP: true,
-                x: state.w / 2,
-                y: state.h - 100,
-                hp: 800,
-                max: 800,
-                dmg: 70 * state.atkMult,
-                speed: 0.8 * state.speedMult,
-                rate: 40 * state.rateMult,
-                range: 120 * state.rangeMult,
-                cd: 0,
-                vx: 0, vy: 0,
-                anim: 0,
-                flash: 0,
-                pal: PALETTES.angel,
-                update: Unit.prototype.update,
-                attack: Unit.prototype.attack,
-                takeDmg: Unit.prototype.takeDmg,
-                draw: Unit.prototype.draw,
-                lifetime: 25 * 60 // 25 seconds
-            });
-            spawnPop(state.w / 2, state.h - 100, 'ANGEL!', '#fef3c7');
-            break;
-
-        case 'surge':
-            state.manaSurgeActive = true;
-            state.manaSurgeTimer = 15 * 60; // 15 seconds at 60fps
-            spawnPop(state.w / 2, 100, 'SURGE!', '#3b82f6');
-            break;
-    }
-}
-
-/**
- * --- SAVE/LOAD SYSTEM ---
- */
-function saveGame() {
-    const saveData = {
-        wave: state.wave,
-        pHP: state.pHP,
-        maxHP: state.maxHP,
-        mana: state.mana,
-        maxMana: state.maxMana,
-        deck: state.deck,
-        skill: state.skill,
-        upgrades: state.upgrades,
-        atkMult: state.atkMult,
-        hpMult: state.hpMult,
-        speedMult: state.speedMult,
-        rangeMult: state.rangeMult,
-        rateMult: state.rateMult,
-        costMult: state.costMult,
-        manaRate: state.manaRate,
-        baseRegen: state.baseRegen
-    };
-    localStorage.setItem('pixelSiegeEliteSave', JSON.stringify(saveData));
-}
-
-function loadGame() {
-    const saveStr = localStorage.getItem('pixelSiegeEliteSave');
-    if(!saveStr) return false;
-
-    try {
-        const saveData = JSON.parse(saveStr);
-
-        document.getElementById('title-screen').classList.add('hidden');
-
-        // Restore state
-        state.wave = saveData.wave;
-        state.pHP = saveData.pHP;
-        state.maxHP = saveData.maxHP;
-        state.mana = saveData.mana;
-        state.maxMana = saveData.maxMana;
-        state.deck = saveData.deck;
-        state.skill = saveData.skill;
-        state.upgrades = saveData.upgrades;
-        state.atkMult = saveData.atkMult;
-        state.hpMult = saveData.hpMult;
-        state.speedMult = saveData.speedMult;
-        state.rangeMult = saveData.rangeMult;
-        state.rateMult = saveData.rateMult;
-        state.costMult = saveData.costMult;
-        state.manaRate = saveData.manaRate;
-        state.baseRegen = saveData.baseRegen;
-
-        state.scene = 'battle';
-        state.units = [];
-        state.projs = [];
-        state.popups = [];
-        state.fx = [];
-        state.boss = null;
-        state.waitingForBoss = false;
-
-        startWave(state.wave);
-        createControls();
-        updateUI();
-
-        return true;
-    } catch(e) {
-        console.error('Failed to load save:', e);
-        return false;
-    }
-}
-
-function hasSavedGame() {
-    return !!localStorage.getItem('pixelSiegeEliteSave');
-}
-
-function deleteSave() {
-    localStorage.removeItem('pixelSiegeEliteSave');
-}
-
-/**
- * --- GAME FLOW ---
- */
-function startGame() {
-    deleteSave(); // Clear any existing save when starting new game
-    document.getElementById('title-screen').classList.add('hidden');
-
-    const allUnits = ['knight', 'archer', 'wizard', 'healer', 'giant'];
-    const shuffled = allUnits.sort(() => Math.random() - 0.5);
-    state.deck = shuffled.slice(0, 3);
-
-    state.scene = 'battle';
-    state.wave = 1;
-    state.mana = 50;
-    state.pHP = 1500;
-    state.maxHP = 1500;
-    state.units = [];
-    state.projs = [];
-    state.popups = [];
-    state.fx = [];
-    state.skill = null;
-    state.upgrades = [];
-    state.boss = null;
-    state.waitingForBoss = false;
-
-    // Reset multipliers
-    state.atkMult = 1.0;
-    state.hpMult = 1.0;
-    state.speedMult = 1.0;
-    state.rangeMult = 1.0;
-    state.rateMult = 1.0;
-    state.costMult = 1.0;
-    state.manaRate = 1.0;
-    state.baseRegen = 0;
-
-    startWave(1);
-    createControls();
-    updateUI();
-}
-
-function startWave(waveNum) {
-    state.wave = waveNum;
-    state.units = [];
-    state.projs = [];
-    state.boss = null;
-    state.waveSpawner = WAVE_CONFIGS[waveNum].enemyWaves;
-    state.currentWaveIndex = 0;
-    state.spawnTimer = 0;
-    state.waitingForBoss = false;
-    
-    document.getElementById('boss-hp-container').classList.remove('active');
-    
-    // Show wave start notification
-    spawnPop(state.w / 2, state.h / 2, `WAVE ${waveNum}`, '#fbbf24');
-    addShake(5);
-}
-
-function spawnBoss(waveNum) {
-    state.boss = new Boss(waveNum);
-    state.waveSpawner = null;
-    document.getElementById('boss-hp-container').classList.add('active');
-    document.getElementById('boss-name').innerText = state.boss.data.name;
-}
-
-function onBossDefeated() {
-    state.boss = null;
-    document.getElementById('boss-hp-container').classList.remove('active');
-
-    if(state.wave === 7) {
-        setTimeout(() => {
-            endGame(true);
-        }, 1000);
+    if(state.mode === 'story') {
+        left.textContent = `STORY  WAVE ${state.round}/${STORY_LAST_WAVE}`;
     } else {
-        setTimeout(() => {
-            showRewardScreen();
-        }, 1000);
+        left.textContent = `BATTLE  ROUND ${state.round}  ${AI_PRESETS[state.difficulty].label}`;
     }
-}
-
-function showRewardScreen() {
-    state.scene = 'reward';
-    const rewards = [];
-
-    if(state.wave === 1 || state.wave === 2) {
-        // New units
-        const available = ['knight', 'archer', 'wizard', 'healer', 'giant'].filter(k => !state.deck.includes(k));
-        const shuffled = available.sort(() => Math.random() - 0.5);
-        rewards.push(...shuffled.slice(0, 3).map(k => ({
-            type: 'unit',
-            key: k,
-            data: UNIT_DEFS[k]
-        })));
-    } else if(state.wave === 3) {
-        // Skills
-        const allSkills = Object.keys(SKILL_DEFS);
-        const shuffled = allSkills.sort(() => Math.random() - 0.5);
-        rewards.push(...shuffled.slice(0, 3).map(k => ({
-            type: 'skill',
-            key: k,
-            data: SKILL_DEFS[k]
-        })));
-    } else {
-        // Upgrades
-        const allUpgrades = Object.keys(UPGRADE_DEFS);
-        const shuffled = allUpgrades.sort(() => Math.random() - 0.5);
-        rewards.push(...shuffled.slice(0, 3).map(k => ({
-            type: 'upgrade',
-            key: k,
-            data: UPGRADE_DEFS[k]
-        })));
-    }
-
-    state.rewardOptions = rewards;
-
-    const container = document.getElementById('reward-cards');
-    container.innerHTML = '';
-
-    rewards.forEach((reward, idx) => {
-        const card = document.createElement('div');
-        card.className = `reward-card ${reward.type}-reward`;
-
-        if(reward.type === 'unit') {
-            card.innerHTML = `
-                <div class="reward-card-name">${reward.data.name}</div>
-                <div class="reward-card-desc">
-                    HP: ${reward.data.hp} | DMG: ${reward.data.dmg}<br>
-                    RANGE: ${reward.data.range} | COST: ${reward.data.cost}
-                </div>
-            `;
-        } else if(reward.type === 'skill') {
-            card.innerHTML = `
-                <div style="font-size:32px;margin-bottom:8px;">${reward.data.icon}</div>
-                <div class="reward-card-name">${reward.data.name}</div>
-                <div class="reward-card-desc">
-                    ${reward.data.effect}<br>
-                    CD: ${reward.data.cooldown}秒
-                </div>
-            `;
-        } else {
-            card.innerHTML = `
-                <div style="font-size:32px;margin-bottom:8px;">${reward.data.icon}</div>
-                <div class="reward-card-name">${reward.data.name}</div>
-                <div class="reward-card-desc">${reward.data.effect}</div>
-            `;
-        }
-
-        card.onclick = () => selectReward(idx);
-        container.appendChild(card);
-    });
-
-    document.getElementById('reward-screen').style.display = 'flex';
-}
-
-function selectReward(idx) {
-    const reward = state.rewardOptions[idx];
-
-    if(reward.type === 'unit') {
-        state.deck.push(reward.key);
-    } else if(reward.type === 'skill') {
-        state.skill = {
-            id: reward.key,
-            data: reward.data,
-            cooldown: 0,
-            maxCooldown: reward.data.cooldown * 60
-        };
-        document.getElementById('skill-icon').innerText = reward.data.icon;
-        document.getElementById('skill-name').innerText = reward.data.name;
-    } else if(reward.type === 'upgrade') {
-        state.upgrades.push(reward.key);
-        applyUpgrade(reward.key);
-    }
-
-    document.getElementById('reward-screen').style.display = 'none';
-
-    state.wave++;
-    if(state.wave <= 7) {
-        state.scene = 'battle';
-        state.mana = 50 + (state.upgrades.filter(u => u === 'start_mana').length * 30);
-        startWave(state.wave);
-        createControls();
-        updateUI();
-        saveGame(); // Auto-save after choosing reward
-    } else {
-        endGame(true);
-    }
-}
-
-function applyUpgrade(key) {
-    switch(key) {
-        case 'atk_boost': state.atkMult *= 1.2; break;
-        case 'hp_boost': state.hpMult *= 1.25; break;
-        case 'speed_boost': state.speedMult *= 1.3; break;
-        case 'range_ext': state.rangeMult *= 1.2; break;
-        case 'atk_speed': state.rateMult *= 0.85; break;
-        case 'mana_flow': state.manaRate *= 1.4; break;
-        case 'mana_accel': state.manaRate *= 1.6; break;
-        case 'cost_reduce': state.costMult *= 0.85; break;
-        case 'start_mana': break;
-        case 'fortified': state.maxHP += 500; state.pHP += 500; break;
-        case 'regen': state.baseRegen += 5; break;
-        case 'counter': break;
-        case 'vampire': break;
-        case 'thorns': break;
-    }
-}
-
-function endGame(win) {
-    state.scene = 'gameover';
-    deleteSave(); // Clear save when game ends
-    const m = document.getElementById('modal');
-    m.style.display = 'flex';
-    const t = document.getElementById('modal-title');
-
-    if(win) {
-        t.innerText = "VICTORY";
-        t.className = "text-6xl font-black italic mb-2 text-transparent bg-clip-text bg-gradient-to-br from-green-400 to-blue-500";
-        document.getElementById('modal-msg').innerText = "ALL WAVES CLEARED";
-    } else {
-        t.innerText = "GAME OVER";
-        t.className = "text-6xl font-black italic mb-2 text-transparent bg-clip-text bg-gradient-to-br from-orange-400 to-red-500";
-        document.getElementById('modal-msg').innerText = "BASE DESTROYED";
-    }
-}
-
-function backToTitle() {
-    document.getElementById('modal').style.display = 'none';
-    document.getElementById('title-screen').classList.remove('hidden');
-    state.scene = 'title';
-    state.wave = 1;
-    state.deck = [];
-    state.boss = null;
-    state.skill = null;
-    state.upgrades = [];
-
-    // Update Continue button visibility
-    const continueBtn = document.getElementById('btn-continue');
-    if(continueBtn) {
-        continueBtn.style.display = hasSavedGame() ? 'block' : 'none';
-    }
-}
-
-/**
- * --- MAIN LOOP ---
- */
-function init() {
-    window.addEventListener('resize', resize);
-    resize();
-
-    // Show/hide Continue button based on save data
-    const continueBtn = document.getElementById('btn-continue');
-    if(continueBtn && hasSavedGame()) {
-        continueBtn.style.display = 'block';
-    }
-
-    requestAnimationFrame(loop);
-}
-
-function resize() {
-    const el = canvas.parentElement;
-    state.w = canvas.width = el.clientWidth;
-    state.h = canvas.height = el.clientHeight;
-    state.summonY = state.h * 0.7;
-}
-
-function createControls() {
-    const deck = document.getElementById('unit-deck');
-    deck.innerHTML = '';
-
-    state.deck.forEach(k => {
-        const u = UNIT_DEFS[k];
-        if(!u) return;
-
-        const btn = document.createElement('div');
-        btn.className = 'unit-card';
-        btn.id = `btn-${k}`;
-
-        btn.onclick = () => {
-            state.sel = state.sel === k ? null : k;
-            updateUI();
-        };
-
-        const icn = document.createElement('canvas');
-        icn.className = 'unit-icon';
-        icn.width = 32;
-        icn.height = 32;
-        const ctx2 = icn.getContext('2d');
-        const s = u.sprite;
-        const p = k === 'healer' ? PALETTES.healer : PALETTES[k];
-        for(let r = 0; r < 14; r++) {
-            for(let c = 0; c < 16; c++) {
-                if(s[r][c] > 0) {
-                    ctx2.fillStyle = p[s[r][c]];
-                    ctx2.fillRect(c * 2, r * 2, 2, 2);
-                }
-            }
-        }
-
-        const cost = Math.ceil(u.cost * state.costMult);
-        btn.innerHTML = `<div class="unit-cost">${cost}</div>`;
-        btn.appendChild(icn);
-        deck.appendChild(btn);
-    });
-}
-
-function updateUI() {
-    document.getElementById('mana-val').innerText = Math.floor(state.mana);
-    document.getElementById('mana-bar').style.width = (state.mana / state.maxMana * 100) + '%';
-    document.getElementById('wave-num').innerText = state.wave;
-    document.getElementById('player-hp').style.width = (Math.max(0, state.pHP) / state.maxHP * 100) + '%';
 
     if(state.boss) {
-        document.getElementById('boss-hp').style.width = (Math.max(0, state.boss.hp) / state.boss.maxHp * 100) + '%';
+        boss.style.display = '';
+        boss.textContent = state.boss.data.name;
+    } else {
+        boss.style.display = 'none';
     }
 
-    state.deck.forEach(k => {
-        const b = document.getElementById(`btn-${k}`);
-        if(b) {
-            const cost = Math.ceil(UNIT_DEFS[k].cost * state.costMult);
-            b.classList.toggle('active', state.sel === k);
-            b.classList.toggle('disabled', state.mana < cost);
-        }
-    });
-
-    // Skill UI
-    const skillBtn = document.getElementById('skill-icon').parentElement;
-    if(state.skill) {
-        skillBtn.classList.remove('disabled');
-        skillBtn.classList.toggle('ready', state.skill.cooldown <= 0);
-        const cdPercent = state.skill.cooldown / state.skill.maxCooldown;
-        document.getElementById('skill-cd-bar').style.width = (cdPercent * 100) + '%';
-
-        if(state.skill.cooldown > 0) {
-            const seconds = Math.ceil(state.skill.cooldown / 60);
-            document.getElementById('skill-timer').innerText = seconds + 's';
-        } else {
-            document.getElementById('skill-timer').innerText = 'READY';
-        }
+    if(state.scene === 'battle') {
+        right.style.display = '';
+        right.textContent = Math.max(0, Math.ceil(state.battleTimer / 60)) + 's';
     } else {
-        skillBtn.classList.add('disabled');
-        document.getElementById('skill-timer').innerText = '--';
+        right.style.display = 'none';
     }
 }
 
-function loop(t) {
-    const dt = 1;
+function updateBattlePanel() {
+    const mine = state.units.filter(u => u.isP).length;
+    const foe = state.units.filter(u => !u.isP).length + (state.boss ? 1 : 0);
+    document.getElementById('bs-allies').textContent = mine;
+    document.getElementById('bs-enemies').textContent = foe;
+    document.getElementById('bs-kills').textContent = state.kills;
+    document.getElementById('bs-time').textContent = Math.max(0, Math.ceil(state.battleTimer / 60)) + 's';
 
+    // 戦術のクールダウン表示
+    const box = document.getElementById('tactic-status');
+    const keys = Object.keys(state.tactics);
+    if(keys.length === 0) {
+        if(!box.dataset.empty) {
+            box.dataset.empty = '1';
+            box.innerHTML = '<div class="tactic-empty">戦術は未習得です。準備フェーズのショップ「戦術」タブで購入すると、バトル中に自動発動します。</div>';
+        }
+        return;
+    }
+    if(box.dataset.empty || box.children.length !== keys.length) {
+        delete box.dataset.empty;
+        box.innerHTML = keys.map(k => `
+            <div class="tactic-row" data-t="${k}">
+                <span class="t-icon">${TACTIC_DEFS[k].icon}</span>
+                <span>${TACTIC_DEFS[k].name}</span>
+                <span class="t-bar"><span class="t-fill"></span></span>
+            </div>`).join('');
+    }
+    keys.forEach(k => {
+        const row = box.querySelector(`.tactic-row[data-t="${k}"] .t-fill`);
+        if(!row) return;
+        const total = TACTIC_DEFS[k].cd * 60;
+        const left = Math.max(0, state.tacticTimers[k] || 0);
+        row.style.width = Math.round((1 - left / total) * 100) + '%';
+    });
+}
+
+function setSpeed(v) {
+    state.speed = v;
+    document.querySelectorAll('.speed-btn').forEach(b => {
+        b.classList.toggle('active', Number(b.dataset.speed) === v);
+    });
+}
+
+// ============================================================
+// 描画
+// ============================================================
+function draw() {
+    const sx = state.shake ? randRange(-state.shake, state.shake) : 0;
+    const sy = state.shake ? randRange(-state.shake, state.shake) : 0;
+
+    ctx.save();
+    ctx.translate(sx, sy);
+
+    // 背景（上＝敵陣、下＝自陣）
+    const g = ctx.createLinearGradient(0, 0, 0, state.h);
+    g.addColorStop(0, '#3b1220');
+    g.addColorStop(0.42, '#1e293b');
+    g.addColorStop(0.58, '#1e293b');
+    g.addColorStop(1, '#0b2d24');
+    ctx.fillStyle = g;
+    ctx.fillRect(-10, -10, state.w + 20, state.h + 20);
+
+    // グリッド
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for(let x = 0; x < state.w; x += 39) { ctx.moveTo(x, 0); ctx.lineTo(x, state.h); }
+    for(let y = 0; y < state.h; y += 39) { ctx.moveTo(0, y); ctx.lineTo(state.w, y); }
+    ctx.stroke();
+
+    // 中央ライン
+    ctx.strokeStyle = 'rgba(148,163,184,0.18)';
+    ctx.setLineDash([6, 6]);
+    ctx.beginPath();
+    ctx.moveTo(0, state.h / 2);
+    ctx.lineTo(state.w, state.h / 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const lay = layout();
+
+    // 準備フェーズ：配置エリアの表示
+    if(state.scene === 'prep') {
+        ctx.fillStyle = state.selected ? 'rgba(16,185,129,0.14)' : 'rgba(16,185,129,0.07)';
+        ctx.fillRect(0, lay.deployTop, state.w, lay.deployBottom - lay.deployTop);
+        ctx.strokeStyle = 'rgba(16,185,129,0.55)';
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        ctx.moveTo(0, lay.deployTop);
+        ctx.lineTo(state.w, lay.deployTop);
+        ctx.moveTo(0, lay.deployBottom);
+        ctx.lineTo(state.w, lay.deployBottom);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = 'rgba(16,185,129,0.7)';
+        ctx.font = '700 9px Futura, sans-serif';
+        ctx.fillText('DEPLOY AREA', 8, lay.deployTop + 12);
+    }
+
+    // 拠点
+    if(state.enemyBase) state.enemyBase.draw(ctx);
+    if(state.playerBase) state.playerBase.draw(ctx);
+
+    // エフェクト（下層）
+    state.fx.forEach(f => {
+        if(f.type === 'laser') {
+            ctx.strokeStyle = f.color;
+            ctx.globalAlpha = clamp(f.life / 22, 0, 1);
+            ctx.lineWidth = 10;
+            ctx.beginPath();
+            ctx.moveTo(f.x1, f.y1);
+            ctx.lineTo(f.x2, f.y2);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+        }
+    });
+
+    // 準備フェーズは編成データをそのまま描画（プレビュー）
+    if(state.scene === 'prep') {
+        drawRosterPreview();
+    } else {
+        if(state.boss) state.boss.draw(ctx);
+        state.units.slice().sort((a, b) => a.y - b.y).forEach(u => u.draw(ctx));
+    }
+
+    // 弾
+    state.projs.forEach(p => {
+        if(p.def.type === 'aoe') {
+            ctx.fillStyle = '#f59e0b';
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 4.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(251,191,36,0.6)';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        } else {
+            ctx.fillStyle = p.isP ? '#e2e8f0' : '#fca5a5';
+            ctx.fillRect(p.x - 1.5, p.y - 4, 3, 8);
+        }
+    });
+
+    // エフェクト（上層）
+    state.fx.forEach(f => {
+        if(f.type === 'laser') return;
+        ctx.globalAlpha = clamp(f.life / 26, 0, 1);
+        if(f.type === 'heal') {
+            ctx.strokeStyle = f.color;
+            ctx.lineWidth = 3;
+            const s = 6;
+            ctx.beginPath();
+            ctx.moveTo(f.x - s, f.y); ctx.lineTo(f.x + s, f.y);
+            ctx.moveTo(f.x, f.y - s); ctx.lineTo(f.x, f.y + s);
+            ctx.stroke();
+        } else {
+            ctx.fillStyle = f.color;
+            ctx.beginPath();
+            ctx.arc(f.x, f.y, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+    });
+
+    // ダメージ表示
+    ctx.textAlign = 'center';
+    ctx.font = '900 13px Futura, sans-serif';
+    ctx.lineWidth = 3;
+    state.popups.forEach(p => {
+        ctx.globalAlpha = clamp(p.life, 0, 1);
+        ctx.strokeStyle = 'rgba(2,6,23,0.9)';
+        ctx.strokeText(p.text, p.x, p.y - p.rise * 0.5);
+        ctx.fillStyle = p.color;
+        ctx.fillText(p.text, p.x, p.y - p.rise * 0.5);
+        ctx.globalAlpha = 1;
+    });
+    ctx.textAlign = 'left';
+
+    // タイムワープ中の演出
+    if(state.timeWarp > 0) {
+        ctx.fillStyle = 'rgba(96,165,250,0.14)';
+        ctx.fillRect(0, 0, state.w, state.h);
+    }
+
+    ctx.restore();
+}
+
+// 準備フェーズのユニット表示（実体を作らずに編成データから描く）
+function drawRosterPreview() {
+    const t = performance.now() / 400;
+    const all = state.roster.map(r => ({ r, isP: true }))
+        .concat(state.aiRoster.map(r => ({ r, isP: false })));
+    all.sort((a, b) => a.r.y - b.r.y);
+
+    all.forEach(({ r, isP }) => {
+        const def = UNIT_DEFS[r.key];
+        const scale = r.key === 'giant' ? 3 : 2;
+        const bounce = Math.abs(Math.sin(t + r.id)) * 2;
+        drawShadow(ctx, def.sprite, r.x, r.y, scale, 0.35);
+        ctx.strokeStyle = isP ? 'rgba(16,185,129,0.75)' : 'rgba(239,68,68,0.75)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.ellipse(r.x, r.y, scale * 5, scale * 2, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        drawSprite(ctx, def.sprite, isP ? def.pal : (ENEMY_PALETTES[r.key] || def.pal),
+            r.x, r.y - bounce, scale, { flipX: !isP });
+
+        // ドラッグ中のユニットを強調
+        if(state.drag && state.drag.entry === r) {
+            ctx.strokeStyle = '#f59e0b';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.ellipse(r.x, r.y, scale * 6, scale * 2.6, 0, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+    });
+}
+
+// ============================================================
+// メインループ
+// ============================================================
+let hudTick = 0;
+
+function loop() {
     if(state.scene === 'battle') {
-        const manaBoost = state.manaSurgeActive ? 3 : 1;
-        state.mana = Math.min(state.maxMana, state.mana + 0.08 * state.manaRate * manaBoost);
-
-        updateWaveSpawner(dt);
-        checkBossSpawn();
-
-        if(state.boss) {
-            state.boss.update(dt);
+        for(let i = 0; i < state.speed; i++) {
+            if(state.scene !== 'battle') break;
+            updateBattle(1);
         }
-
-        state.units.forEach(u => {
-            u.update(dt);
-            // Remove timed summons (angel)
-            if(u.lifetime !== undefined) {
-                u.lifetime--;
-                if(u.lifetime <= 0) u.hp = 0;
-            }
-        });
-        updateFX(dt);
-        state.units = state.units.filter(u => u.hp > 0);
-
-        // Skill cooldown
-        if(state.skill && state.skill.cooldown > 0) {
-            state.skill.cooldown--;
-        }
-
-        if(state.pHP <= 0) {
-            endGame(false);
-        }
-
-        updateUI();
+        if(++hudTick % 6 === 0) { updateHud(); updateBattlePanel(); }
+    } else {
+        updateFx(1);
     }
 
     draw();
     requestAnimationFrame(loop);
 }
 
-function draw() {
-    const sx = (Math.random() - 0.5) * state.shake;
-    const sy = (Math.random() - 0.5) * state.shake;
+// ============================================================
+// 初期化
+// ============================================================
+function resize() {
+    const rect = document.getElementById('stage').getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    state.w = Math.max(240, Math.round(rect.width));
+    state.h = Math.max(320, Math.round(rect.height));
+    canvas.width = Math.round(state.w * dpr);
+    canvas.height = Math.round(state.h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false;
 
-    ctx.save();
-    ctx.translate(sx, sy);
-
-    const g = ctx.createLinearGradient(0, 0, 0, state.h);
-    g.addColorStop(0, '#1e293b');
-    g.addColorStop(0.5, '#334155');
-    g.addColorStop(1, '#1e293b');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, state.w, state.h);
-
-    ctx.strokeStyle = 'rgba(255,255,255,0.03)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for(let i = 0; i < state.w; i += 40) {
-        ctx.moveTo(i, 0);
-        ctx.lineTo(i, state.h);
-    }
-    for(let i = 0; i < state.h; i += 40) {
-        ctx.moveTo(0, i);
-        ctx.lineTo(state.w, i);
-    }
-    ctx.stroke();
-
-    // Draw summon zone
-    if(state.sel) {
-        ctx.fillStyle = 'rgba(16, 185, 129, 0.1)';
-        const zoneY = state.summonY;
-        ctx.fillRect(0, zoneY, state.w, state.h - zoneY);
-        ctx.beginPath();
-        ctx.moveTo(0, zoneY);
-        ctx.lineTo(state.w, zoneY);
-        ctx.strokeStyle = '#10b981';
-        ctx.setLineDash([5, 5]);
-        ctx.stroke();
-        ctx.setLineDash([]);
-    }
-
-    // Base
-    ctx.fillStyle = '#047857';
-    ctx.fillRect(0, state.h - 30, state.w, 30);
-
-    // Draw effects
-    state.fx.forEach(fx => {
-        if(fx.type === 'laser') {
-            ctx.strokeStyle = fx.color;
-            ctx.lineWidth = 8;
-            ctx.globalAlpha = fx.life / 20;
-            ctx.beginPath();
-            ctx.moveTo(fx.x1, fx.y1);
-            ctx.lineTo(fx.x2, fx.y2);
-            ctx.stroke();
-            ctx.globalAlpha = 1;
-        } else {
-            ctx.fillStyle = fx.color;
-            ctx.globalAlpha = fx.life / 30;
-            ctx.beginPath();
-            ctx.arc(fx.x, fx.y, 4, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.globalAlpha = 1;
-        }
-    });
-
-    if(state.boss) {
-        state.boss.draw(ctx);
-    }
-
-    state.units.sort((a, b) => a.y - b.y);
-    state.units.forEach(u => u.draw(ctx));
-
-    state.projs.forEach(p => {
-        ctx.fillStyle = p.def.type === 'aoe' ? '#f59e0b' : '#fff';
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-        ctx.fill();
-    });
-
-    state.popups.forEach(p => {
-        ctx.font = '900 14px Futura';
-        ctx.fillStyle = 'black';
-        ctx.strokeStyle = 'white';
-        ctx.lineWidth = 2;
-        ctx.globalAlpha = p.l;
-        ctx.strokeText(p.v, p.x, p.y - p.z);
-        ctx.fillStyle = p.c;
-        ctx.fillText(p.v, p.x, p.y - p.z);
-        ctx.globalAlpha = 1;
-    });
-
-    // Time warp indicator
-    if(state.timeWarpActive) {
-        ctx.fillStyle = 'rgba(96, 165, 250, 0.2)';
-        ctx.fillRect(0, 0, state.w, state.h);
-        ctx.fillStyle = '#60a5fa';
-        ctx.font = '16px Futura';
-        ctx.fillText('TIME WARP', 10, 30);
-    }
-
-    // Mana surge indicator
-    if(state.manaSurgeActive) {
-        ctx.fillStyle = '#3b82f6';
-        ctx.font = '16px Futura';
-        ctx.fillText('MANA SURGE', 10, 50);
-    }
-
-    ctx.restore();
+    if(state.playerBase) state.playerBase.reposition();
+    if(state.enemyBase) state.enemyBase.reposition();
+    if(state.scene === 'prep') clampRosters();
 }
 
-// Input
-canvas.addEventListener('touchstart', e => {
-    e.preventDefault();
-    handleInput(e.touches[0].clientX, e.touches[0].clientY);
-}, { passive: false });
-canvas.addEventListener('mousedown', e => handleInput(e.clientX, e.clientY));
+function bindEvents() {
+    window.addEventListener('resize', resize);
+    window.addEventListener('orientationchange', () => setTimeout(resize, 120));
 
-function handleInput(cx, cy) {
-    if(state.scene !== 'battle' || !state.sel) return;
-    const r = canvas.getBoundingClientRect();
-    const x = (cx - r.left) * (state.w / r.width);
-    const y = (cy - r.top) * (state.h / r.height);
+    canvas.addEventListener('pointerdown', onPointerDown);
+    canvas.addEventListener('pointermove', onPointerMove);
+    canvas.addEventListener('pointerup', onPointerUp);
+    canvas.addEventListener('pointercancel', () => { state.drag = null; });
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
 
-    if(y > state.summonY) {
-        const u = UNIT_DEFS[state.sel];
-        const cost = Math.ceil(u.cost * state.costMult);
-        if(state.mana >= cost) {
-            state.mana -= cost;
-            state.units.push(new Unit(state.sel, true, x, y));
-        }
+    // タイトル
+    document.getElementById('btn-newgame').addEventListener('click', () => showScreen('screen-mode'));
+    document.getElementById('btn-continue').addEventListener('click', loadGame);
+
+    // モード選択
+    document.getElementById('btn-mode-story').addEventListener('click', () => startNewGame('story'));
+    document.getElementById('btn-mode-battle').addEventListener('click', () => startNewGame('battle'));
+    document.getElementById('btn-mode-back').addEventListener('click', backToTitle);
+    document.querySelectorAll('.diff-btn').forEach(b => {
+        b.addEventListener('click', () => {
+            state.difficulty = b.dataset.diff;
+            document.querySelectorAll('.diff-btn').forEach(x => x.classList.toggle('active', x === b));
+            toast(`難易度: ${AI_PRESETS[state.difficulty].label} — ${AI_PRESETS[state.difficulty].desc}`);
+        });
+    });
+
+    // 準備フェーズ
+    document.getElementById('tab-units').addEventListener('click', () => setTab('units'));
+    document.getElementById('tab-upgrades').addEventListener('click', () => setTab('upgrades'));
+    document.getElementById('tab-tactics').addEventListener('click', () => setTab('tactics'));
+    document.getElementById('btn-clear').addEventListener('click', clearRoster);
+    document.getElementById('btn-start-battle').addEventListener('click', startBattle);
+
+    // バトル速度
+    document.querySelectorAll('.speed-btn').forEach(b => {
+        b.addEventListener('click', () => setSpeed(Number(b.dataset.speed)));
+    });
+
+    // 結果画面
+    document.getElementById('btn-result-next').addEventListener('click', enterPrep);
+    document.getElementById('btn-result-retry').addEventListener('click', retryRound);
+    document.getElementById('btn-result-title').addEventListener('click', backToTitle);
+}
+
+function init() {
+    resize();
+    bindEvents();
+    document.getElementById('btn-continue').style.display = hasSave() ? '' : 'none';
+    showScreen('screen-title');
+    requestAnimationFrame(loop);
+
+    // PWA: Service Worker 登録（オフライン起動用）
+    if('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('sw.js').catch(() => { /* 失敗しても動作に影響なし */ });
+        });
     }
 }
 
