@@ -314,6 +314,7 @@ class Unit {
         this.pal = isP ? this.def.pal : (ENEMY_PALETTES[key] || this.def.pal);
         this.radius = 7;
         this.target = null;                 // ロックオン中の攻撃対象
+        this.slowTimer = 0;                 // スケルトンの鈍足効果の残りフレーム
     }
 
     // 攻撃対象を探す
@@ -370,6 +371,12 @@ class Unit {
         // タイムワープ中は敵の移動速度が半減する
         let spd = this.speed;
         if(!this.isP && state.timeWarp > 0) spd *= 0.5;
+
+        // スケルトンの矢を受けると一定時間、移動速度が鈍る
+        if(this.slowTimer > 0) {
+            this.slowTimer -= dt;
+            spd *= SKELETON_SLOW_MULT;
+        }
 
         // 攻撃対象の解決。回復役は毎フレーム最も負傷した味方を選び直すが、
         // それ以外は一度ロックした敵ユニット/ボスを、死ぬか大きく引き離される
@@ -2287,6 +2294,10 @@ function updateProjectiles(dt) {
                 addShake(2);
             } else {
                 t.takeDmg(p.dmg, p.owner);
+                // スケルトンの矢が命中した相手を一定時間鈍足にする（拠点・ボスは対象外）
+                if(p.def.slowDuration && !t.isBase && t.slowTimer !== undefined) {
+                    t.slowTimer = Math.max(t.slowTimer, p.def.slowDuration);
+                }
             }
         } else {
             const sp = 7 * dt;
@@ -2363,7 +2374,9 @@ function updateSiegeCollapse(dt) {
     if(!isVsMode()) return;
 
     const enemyDefenders = state.units.some(u => !u.isP);
-    const playerDefenders = state.units.some(u => u.isP);
+    // 守護天使などの召喚系戦術がクールダウン待ちで一時的に不在なだけの場合は
+    // 「防衛ユニットが全滅した」扱いにしない（すぐ復帰する見込みがあるため）
+    const playerDefenders = state.units.some(u => u.isP) || hasPendingSummon();
     const collapseFrames = 90; // 約1.5秒で陥落する速度
 
     if(!enemyDefenders && playerDefenders && state.enemyBase && state.enemyBase.hp > 0) {

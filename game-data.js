@@ -35,6 +35,11 @@ function roleLabel(def) {
     return null;
 }
 
+// スケルトンの矢を受けた相手を鈍足にする効果（打たれ弱く火力も低いぶん、
+// 長射程を活かした足止め役としての個性を持たせる）
+const SKELETON_SLOW_MULT = 0.5;      // 移動速度を半分にする
+const SKELETON_SLOW_DURATION = 180;  // 効果時間（フレーム。3秒）
+
 // ============================================================
 // ユニット定義
 //   cost   … 購入に必要なゴールド
@@ -89,7 +94,8 @@ const UNIT_DEFS = {
     skeleton: {
         name:'スケルトン', cost:22, hp:36, dmg:9, range:185, speed:0.34, rate:80,
         type:'ranged', mass:0.4, kb:0, sprite:SPRITES.skeleton, pal:PALETTES.skeleton,
-        comment:'アーチャーを凌ぐ超長射程の狙撃役。打たれ弱く動きも遅い'
+        slowDuration: SKELETON_SLOW_DURATION,
+        comment:'アーチャーを凌ぐ超長射程の狙撃役。命中した相手を鈍足にする呪いの矢を放つ。打たれ弱く動きも遅い'
     },
 
     // --- 戦術で召喚される特殊ユニット（ショップには並ばない） ---
