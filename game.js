@@ -130,6 +130,14 @@ const vampireRate = () => Math.min(0.5, 0.10 * upCount('vampire'));
 const unitLevel     = k => (state.unitLevels && state.unitLevels[k]) || 0;
 const unitLevelMult = k => Math.min(UNIT_LEVEL_MULT_CAP, Math.pow(1 + UNIT_LEVEL_STAT_GAIN, unitLevel(k)));
 
+// このユニット種のレベルアップが実際に意味を持つ上限。全体強化(攻撃/HP)を
+// 既に積んでいるほど、PLAYER_ATK_TOTAL_CAP / PLAYER_HP_TOTAL_CAP との掛け算
+// 上限に先に達してしまうため、レベルアップ単体で押し上げられる余地は狭まる。
+// これを見ずに UNIT_LEVEL_MULT_CAP だけを基準に「強化する」ボタンを出し続けると、
+// 全体強化を積んでいるプレイヤーほど無駄打ちしやすくなってしまう
+const effectiveUnitLevelCap = key =>
+    Math.min(UNIT_LEVEL_MULT_CAP, PLAYER_ATK_TOTAL_CAP / atkMult(), PLAYER_HP_TOTAL_CAP / hpMult());
+
 // AI（VERSUS限定）が投資したユニット個別レベル。計算式はプレイヤーと共通
 const aiUnitLevel     = k => (state.aiUnitLevels && state.aiUnitLevels[k]) || 0;
 const aiUnitLevelMult = k => Math.min(UNIT_LEVEL_MULT_CAP, Math.pow(1 + UNIT_LEVEL_STAT_GAIN, aiUnitLevel(k)));
@@ -140,11 +148,15 @@ const aiUnitBuyCost = key => Math.round(UNIT_DEFS[key].cost * aiUnitLevelMult(ke
 // プレイヤーが現在編成に持っているそのユニット種の数
 const unitOwnedCount = key => state.roster.filter(r => r.key === key).length;
 
-// 実際の購入価格。ユニット個別レベルで強化済みの種類は新規購入も
-// その分だけ割高になる（そうしないと「1体だけ安く強化してから量産する」
-// ことでレベルアップの価格設計を踏み倒せてしまうため。強化コストが
-// 所持数に比例するのと合わせて、後から買い足しても損得が生じないようにしてある）
-const unitBuyCost = key => Math.round(UNIT_DEFS[key].cost * unitLevelMult(key));
+// 全体強化(攻撃/HP)による「今の1体の強さ」の目安。attackとHPの上昇率は
+// 別々の全体強化で独立して伸びるため、両方の幾何平均を目安として使う
+const globalPowerMult = () => Math.sqrt(atkMult() * hpMult());
+
+// 実際の購入価格。ユニット個別レベル・全体強化(攻撃/HP)で強化済みなほど
+// 新規購入も割高になる（そうしないと「1体だけ安く強化してから量産する」
+// ことで価格設計を踏み倒せてしまうため。強化コストが所持数に比例するのと
+// 合わせて、後から買い足しても損得が生じないようにしてある）
+const unitBuyCost = key => Math.round(UNIT_DEFS[key].cost * unitLevelMult(key) * globalPowerMult());
 
 // AI 対戦モードで敵ユニットに掛かる強化倍率
 // （ラウンド進行によるスケーリング + AI が余剰予算を注ぎ込んだ分）
@@ -292,8 +304,11 @@ class Unit {
         // （SURVIVAL/STORYではaiUnitLevelsが空のまま=常に等倍）
         const ep = isP ? 1 : enemyPowerMult();
         const lm = isP ? unitLevelMult(key) : aiUnitLevelMult(key);
-        const am = (isP ? atkMult() : ep) * lm;
-        const hm = (isP ? hpMult() : ep) * lm;
+        // 全体強化とユニット個別レベルは掛け算で効くため、片方だけに
+        // 全振りしても両方に分散させても最終的な強さが変わらないよう、
+        // 合計倍率自体にも上限を設ける（プレイヤー側のみ）
+        const am = isP ? Math.min(PLAYER_ATK_TOTAL_CAP, atkMult() * lm) : ep * lm;
+        const hm = isP ? Math.min(PLAYER_HP_TOTAL_CAP, hpMult() * lm) : ep * lm;
         const rm = isP ? rateMult() : 1;
         const sm = isP ? moveMult() : 1;
         const gm = isP ? rangeMult() : 1;
@@ -1694,9 +1709,13 @@ function buildUnitCard(key, opts) {
     // レベルアップ済みなら、表示するステータスにもその分を反映する（上限あり）。
     // 敵側はVERSUSでAIが投資した分を反映する（それ以外のモードは常に0）
     const lvl = o.enemy ? aiUnitLevel(key) : unitLevel(key);
-    const lvlMult = Math.min(UNIT_LEVEL_MULT_CAP, Math.pow(1 + UNIT_LEVEL_STAT_GAIN, lvl));
-    const dispHp = Math.round(def.hp * lvlMult);
-    const dispDmg = Math.round(Math.abs(def.dmg) * lvlMult) * (def.dmg < 0 ? -1 : 1);
+    const lvlMult = o.enemy ? aiUnitLevelMult(key) : unitLevelMult(key);
+    // プレイヤー側は全体強化(攻撃/HP)とも掛け合わさった、実際に戦闘で
+    // 使われる数値を表示する（敵側は全体強化の影響を受けないためそのまま）
+    const dispAtkMult = o.enemy ? lvlMult : Math.min(PLAYER_ATK_TOTAL_CAP, atkMult() * lvlMult);
+    const dispHpMult  = o.enemy ? lvlMult : Math.min(PLAYER_HP_TOTAL_CAP, hpMult() * lvlMult);
+    const dispHp = Math.round(def.hp * dispHpMult);
+    const dispDmg = Math.round(Math.abs(def.dmg) * dispAtkMult) * (def.dmg < 0 ? -1 : 1);
 
     const card = document.createElement('div');
     card.className = 'shop-card';
@@ -1751,7 +1770,7 @@ function buildUnitCard(key, opts) {
     if(o.canLevelUp) {
         const lvup = document.createElement('div');
         lvup.className = 'card-lvup';
-        if(lvlMult >= UNIT_LEVEL_MULT_CAP) {
+        if(lvlMult >= effectiveUnitLevelCap(key)) {
             lvup.innerHTML = `<span class="lvup-maxed">★ 最大まで強化済み</span>`;
         } else {
             lvup.innerHTML = `
@@ -1770,7 +1789,7 @@ function buildUnitCard(key, opts) {
 
 // ユニット種別レベルアップの購入
 function buyUnitLevel(key) {
-    if(unitLevelMult(key) >= UNIT_LEVEL_MULT_CAP) { toast('これ以上は強化できません'); return; }
+    if(unitLevelMult(key) >= effectiveUnitLevelCap(key)) { toast('これ以上は強化できません'); return; }
     const lvl = unitLevel(key);
     const cost = unitLevelCost(key, lvl, unitOwnedCount(key));
     if(state.gold < cost) { toast('ゴールドが足りません'); return; }
