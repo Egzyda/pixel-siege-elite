@@ -23,6 +23,7 @@ const state = {
 
     roster: [],               // プレイヤー編成 [{id, key, x, y}]
     aiRoster: [],             // AI 編成 [{id, key, x, y}]
+    storyEnemies: [],         // STORY: そのステージの雑魚の出現位置 [{key, x, y}]（準備フェーズから表示）
     aiGold: 0,                // AI の残予算（繰り越し用）
     aiPower: 1,               // AI が余剰予算で得た編成強化倍率
     aiPersonality: null,      // AI の「好み」（試合開始時に抽選、試合中は固定）
@@ -960,8 +961,12 @@ function buildAiRoster() {
     }
 
     const preset = AI_PRESETS[state.difficulty];
-    // 序盤にいきなり差がつかないよう、予算補正は数ラウンドかけて効いてくる
-    const ramp = 1 + (preset.budgetMult - 1) * Math.min(1, state.round / 3);
+    // 序盤にいきなり差がつかないよう、予算補正は数ラウンドかけて効いてくる。
+    // ただしHARDは「本気で対策して勝ちにくる」難易度のため、この緩和は適用せず
+    // 初回ラウンドから全力で来る
+    const ramp = state.difficulty === 'hard'
+        ? preset.budgetMult
+        : 1 + (preset.budgetMult - 1) * Math.min(1, state.round / 3);
     const roundIncome = Math.round(budgetForRound(state.round) * ramp);
     state.aiGold += roundIncome;
 
@@ -1089,6 +1094,7 @@ function enterPrep() {
     state.enemyBase = isVsMode() ? new Base(false) : null;
 
     if(isVsMode()) buildAiRoster();
+    if(state.mode === 'story') buildStoryEnemyPreview();
     clampRosters();
 
     // やり直し用のスナップショットを保存
@@ -1097,7 +1103,8 @@ function enterPrep() {
         roster: state.roster, aiRoster: state.aiRoster, aiGold: state.aiGold,
         aiPower: state.aiPower, aiUnitLevels: state.aiUnitLevels,
         playerLife: state.playerLife, aiLife: state.aiLife,
-        upgrades: state.upgrades, unitLevels: state.unitLevels, tactics: state.tactics, nextId: state.nextId
+        upgrades: state.upgrades, unitLevels: state.unitLevels, tactics: state.tactics, nextId: state.nextId,
+        storyEnemies: state.storyEnemies
     });
 
     hideScreens();
@@ -1486,6 +1493,7 @@ function retryRound() {
     state.unitLevels = s.unitLevels || {};
     state.tactics = s.tactics;
     state.nextId = s.nextId;
+    state.storyEnemies = s.storyEnemies || [];
 
     // enterPrep で AI 編成を再抽選しないように、このラウンド分は購入済み扱いにする
     state.scene = 'prep';
@@ -1522,6 +1530,7 @@ function startNewGame(mode) {
     state.gold = budgetForRound(1);
     state.roster = [];
     state.aiRoster = [];
+    state.storyEnemies = [];
     state.aiGold = 0;
     state.aiPower = 1;
     state.aiUnitLevels = {};
@@ -1581,7 +1590,8 @@ function saveGame() {
             aiPower: state.aiPower, aiUnitLevels: state.aiUnitLevels,
             playerLife: state.playerLife, aiLife: state.aiLife,
             aiPersonalityName: state.aiPersonality ? state.aiPersonality.name : null,
-            upgrades: state.upgrades, unitLevels: state.unitLevels, tactics: state.tactics, nextId: state.nextId
+            upgrades: state.upgrades, unitLevels: state.unitLevels, tactics: state.tactics, nextId: state.nextId,
+            storyEnemies: state.storyEnemies
         }));
     } catch(e) { /* 保存できない環境では何もしない */ }
 }
@@ -1615,8 +1625,9 @@ function loadGame() {
         state.unitLevels = s.unitLevels || {};
         state.tactics = s.tactics || {};
         state.nextId = s.nextId || 1;
+        state.storyEnemies = s.storyEnemies || [];
 
-        // セーブ地点は準備フェーズの開始時。AI 編成は再抽選しない
+        // セーブ地点は準備フェーズの開始時。AI 編成・STORYの敵配置は再抽選しない
         state.scene = 'prep';
         state.selected = null;
         state.undoStack = [];
@@ -1635,7 +1646,8 @@ function loadGame() {
             roster: state.roster, aiRoster: state.aiRoster, aiGold: state.aiGold,
             aiPower: state.aiPower, aiUnitLevels: state.aiUnitLevels,
             playerLife: state.playerLife, aiLife: state.aiLife,
-            upgrades: state.upgrades, unitLevels: state.unitLevels, tactics: state.tactics, nextId: state.nextId
+            upgrades: state.upgrades, unitLevels: state.unitLevels, tactics: state.tactics, nextId: state.nextId,
+            storyEnemies: state.storyEnemies
         });
 
         hideScreens();
@@ -1918,9 +1930,10 @@ function unitAtPoint(x, y) {
         });
         return hit;
     }
-    // 準備フェーズは敵（AI編成）のみ対象。味方のタップは売却に使うため
+    // 準備フェーズは敵（AI編成 / STORYの敵プレビュー）のみ対象。
+    // 味方のタップは売却に使うため
     let hit = null, bd = 26;
-    state.aiRoster.forEach(r => {
+    state.aiRoster.concat(state.storyEnemies).forEach(r => {
         const d = Math.hypot(r.x - x, r.y - y - 10);
         if(d < bd) { bd = d; hit = { key: r.key, isP: false }; }
     });
@@ -2218,24 +2231,40 @@ function onPointerUp(e) {
 // STORY: そのステージの雑魚とボスを、戦闘開始と同時に全員フィールドへ配置する。
 // タイマーで小出しにする代わりに、奥行き(depth)に応じてY座標を散らすことで、
 // 手前の敵から順に交戦が始まる自然な時間差を生む（ボスは最奥・最ノロマ）
-function spawnStoryStage(stageNum) {
-    const conf = STORY_STAGES[stageNum];
+// STORY: そのステージの雑魚の出現位置を計算する。準備フェーズの時点で
+// 配置が見えるよう、ラウンド開始時(buildStoryEnemyPreview)に一度だけ
+// 決めてstate.storyEnemiesへ保存し、プレビュー表示と実際の戦闘開始時の
+// 配置(spawnStoryStage)の両方で同じ座標を使う（作り直すと見た目と
+// 実際の配置がずれてしまうため）
+function buildStoryEnemyPreview() {
+    const conf = STORY_STAGES[state.round];
     const lay = layout();
     const spawnFar = 150 + topInset();       // 奥（ボスに近い側）
     const spawnNear = lay.deployTop - 20;    // 手前（配置エリアのすぐ上）
     const span = spawnNear - spawnFar;
 
+    state.storyEnemies = [];
     conf.enemies.forEach(g => {
         for(let i = 0; i < g.count; i++) {
             const depth = clamp(g.depth + randRange(-0.06, 0.06), 0, 1);
-            state.units.push(new Unit(g.type, false,
-                randRange(26, state.w - 26),
-                spawnFar + span * depth));
+            state.storyEnemies.push({
+                key: g.type,
+                x: randRange(26, state.w - 26),
+                y: spawnFar + span * depth
+            });
         }
+    });
+}
+
+// STORY: 準備フェーズで表示していた配置(state.storyEnemies)をそのまま
+// 実体化し、ボスも同時に登場させる
+function spawnStoryStage(stageNum) {
+    state.storyEnemies.forEach(e => {
+        state.units.push(new Unit(e.key, false, e.x, e.y));
     });
 
     state.boss = new Boss(stageNum);
-    spawnPop(state.w / 2, spawnFar + 20, state.boss.data.name + ' 出現！', '#f59e0b');
+    spawnPop(state.w / 2, 150 + topInset() + 20, state.boss.data.name + ' 出現！', '#f59e0b');
     addShake(6);
     updateHud();
 }
@@ -2707,7 +2736,8 @@ function draw() {
 function drawRosterPreview() {
     const t = performance.now() / 400;
     const all = state.roster.map(r => ({ r, isP: true }))
-        .concat(state.aiRoster.map(r => ({ r, isP: false })));
+        .concat(state.aiRoster.map(r => ({ r, isP: false })))
+        .concat(state.mode === 'story' ? state.storyEnemies.map((r, i) => ({ r: { ...r, id: i }, isP: false })) : []);
     all.sort((a, b) => a.r.y - b.r.y);
 
     all.forEach(({ r, isP }) => {
@@ -2732,6 +2762,33 @@ function drawRosterPreview() {
             ctx.stroke();
         }
     });
+
+    // STORY: ボスも準備フェーズの時点で見えるようにする
+    if(state.mode === 'story') drawStoryBossPreview(t);
+}
+
+// STORY: 準備フェーズでのボスのプレビュー表示（実際の出現位置・見た目と一致させる）
+function drawStoryBossPreview(t) {
+    const data = BOSS_DEFS[state.round];
+    if(!data) return;
+    const x = state.w / 2, y = 130 + topInset();
+    const sprite = data.sprite.idle || data.sprite;
+    const scale = 3.5;
+    const bounce = Math.abs(Math.sin(t)) * 4;
+
+    drawShadow(ctx, sprite, x, y, scale, 0.45);
+    ctx.strokeStyle = 'rgba(239,68,68,0.75)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.ellipse(x, y, scale * 5, scale * 2, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    drawSprite(ctx, sprite, data.palette, x, y - bounce, scale, {});
+
+    ctx.fillStyle = 'rgba(245,158,11,0.9)';
+    ctx.font = '700 10px Futura, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(data.name, x, y - scale * 14);
+    ctx.textAlign = 'left';
 }
 
 // ============================================================
