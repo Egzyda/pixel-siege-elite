@@ -171,82 +171,135 @@ function budgetForRound(round) {
 // ステージ（STORY）モードのウェーブ構成
 // delay はひとつ前の集団が出現してからのフレーム数
 // ============================================================
-const WAVE_CONFIGS = {
-    1: { enemyWaves: [
-        { enemies: [{type:'goblin', count:2}], delay: 60 },
-        { enemies: [{type:'goblin', count:2}], delay: 300 },
-        { enemies: [{type:'goblin', count:3}], delay: 300 }
+// ============================================================
+// STORYステージの敵構成。
+// タイマー式ウェーブは廃止し、そのステージの敵を戦闘開始と同時に全員
+// フィールドへ配置する（ボスも含め、最初から全部見えている）。
+// depth は出現エリア内での奥行き位置（0=最奥・ボスに近い側、
+// 1=最前列・プレイヤー拠点に近い側）。奥にいる敵ほど到達が遅れるため、
+// タイマーを使わずに「手前から順に交戦が始まる」時間差が自然に生まれる。
+// ============================================================
+const STORY_STAGES = {
+    // --- 1〜3: 準備期間。ゴブリンのみが相手で、数・強さは据え置き ---
+    1: { enemies: [
+        { type:'goblin', count:2, depth:0.85 },
+        { type:'goblin', count:2, depth:0.50 },
+        { type:'goblin', count:3, depth:0.15 }
     ]},
-    2: { enemyWaves: [
-        { enemies: [{type:'goblin', count:3}], delay: 60 },
-        { enemies: [{type:'goblin', count:2}, {type:'orc', count:1}], delay: 300 },
-        { enemies: [{type:'orc', count:2}], delay: 300 }
+    2: { enemies: [
+        { type:'goblin', count:3, depth:0.85 },
+        { type:'goblin', count:3, depth:0.50 },
+        { type:'goblin', count:4, depth:0.15 }
     ]},
-    3: { enemyWaves: [
-        { enemies: [{type:'skeleton', count:2}, {type:'goblin', count:2}], delay: 60 },
-        { enemies: [{type:'skeleton', count:2}, {type:'orc', count:1}], delay: 300 },
-        { enemies: [{type:'skeleton', count:3}, {type:'orc', count:1}], delay: 300 }
+    3: { enemies: [
+        { type:'goblin', count:4, depth:0.85 },
+        { type:'goblin', count:4, depth:0.50 },
+        { type:'goblin', count:5, depth:0.15 }
     ]},
-    4: { enemyWaves: [
-        { enemies: [{type:'goblin', count:5}, {type:'skeleton', count:2}], delay: 60 },
-        { enemies: [{type:'orc', count:1}, {type:'skeleton', count:2}], delay: 300 },
-        { enemies: [{type:'orc', count:2}, {type:'skeleton', count:2}], delay: 300 }
+
+    // --- 4〜10: 本編。旧STORY(全7ステージ)相当の構成をそのまま踏襲しつつ、
+    //     終盤は他ユニットも敵として登場させ幅を持たせる ---
+    4: { enemies: [
+        { type:'goblin', count:2, depth:0.85 },
+        { type:'goblin', count:2, depth:0.50 },
+        { type:'goblin', count:3, depth:0.15 }
     ]},
-    5: { enemyWaves: [
-        { enemies: [{type:'skeleton', count:4}, {type:'orc', count:2}], delay: 60 },
-        { enemies: [{type:'skeleton', count:3}, {type:'orc', count:2}], delay: 280 },
-        { enemies: [{type:'skeleton', count:4}, {type:'orc', count:2}, {type:'goblin', count:5}], delay: 280 }
+    5: { enemies: [
+        { type:'goblin', count:3, depth:0.85 },
+        { type:'goblin', count:2, depth:0.55 }, { type:'orc', count:1, depth:0.55 },
+        { type:'orc', count:2, depth:0.15 }
     ]},
-    6: { enemyWaves: [
-        { enemies: [{type:'orc', count:1}, {type:'skeleton', count:2}], delay: 60 },
-        { enemies: [{type:'orc', count:2}, {type:'skeleton', count:2}], delay: 280 },
-        { enemies: [{type:'orc', count:2}, {type:'skeleton', count:2}, {type:'goblin', count:5}], delay: 280 }
+    6: { enemies: [
+        { type:'skeleton', count:2, depth:0.85 }, { type:'goblin', count:2, depth:0.85 },
+        { type:'skeleton', count:2, depth:0.50 }, { type:'orc', count:1, depth:0.50 },
+        { type:'skeleton', count:3, depth:0.15 }, { type:'orc', count:1, depth:0.15 }
     ]},
-    7: { enemyWaves: [
-        { enemies: [{type:'goblin', count:10}, {type:'orc', count:2}], delay: 60 },
-        { enemies: [{type:'orc', count:3}, {type:'skeleton', count:5}], delay: 280 },
-        { enemies: [{type:'orc', count:4}, {type:'skeleton', count:5}], delay: 280 }
+    7: { enemies: [
+        { type:'goblin', count:5, depth:0.85 }, { type:'skeleton', count:2, depth:0.85 },
+        { type:'orc', count:1, depth:0.50 }, { type:'skeleton', count:2, depth:0.50 },
+        { type:'orc', count:2, depth:0.15 }, { type:'skeleton', count:2, depth:0.15 }, { type:'archer', count:2, depth:0.10 }
+    ]},
+    8: { enemies: [
+        { type:'skeleton', count:4, depth:0.85 }, { type:'orc', count:2, depth:0.85 },
+        { type:'skeleton', count:3, depth:0.50 }, { type:'orc', count:2, depth:0.50 },
+        { type:'skeleton', count:4, depth:0.15 }, { type:'orc', count:2, depth:0.15 }, { type:'goblin', count:5, depth:0.15 },
+        { type:'wizard', count:1, depth:0.08 }
+    ]},
+    9: { enemies: [
+        { type:'orc', count:1, depth:0.85 }, { type:'skeleton', count:2, depth:0.85 },
+        { type:'orc', count:2, depth:0.50 }, { type:'skeleton', count:2, depth:0.50 }, { type:'healer', count:1, depth:0.50 },
+        { type:'orc', count:2, depth:0.15 }, { type:'skeleton', count:2, depth:0.15 }, { type:'goblin', count:5, depth:0.15 },
+        { type:'giant', count:1, depth:0.08 }
+    ]},
+    10: { enemies: [
+        { type:'goblin', count:10, depth:0.85 }, { type:'orc', count:2, depth:0.85 },
+        { type:'orc', count:3, depth:0.50 }, { type:'skeleton', count:5, depth:0.50 },
+        { type:'orc', count:4, depth:0.15 }, { type:'skeleton', count:5, depth:0.15 },
+        { type:'archer', count:2, depth:0.08 }, { type:'wizard', count:1, depth:0.08 }
     ]}
 };
 
-const STORY_LAST_WAVE = 7;
+const STORY_LAST_WAVE = 10;
+
+// STORYのバトル中のみ、拠点間の距離を伸ばすためにフィールドを縦横均一に
+// 拡大する（見た目は縮小表示になり、画面のスクロールは発生しない）。
+// 1.0 なら伸ばさない。詳細はresize()内のfieldScale()を参照
+const STORY_FIELD_SCALE = 0.7;
 
 // ============================================================
-// ボス定義（ステージごとに 1 体）
+// ボス定義（ステージごとに1体。戦闘開始と同時に雑魚と並行して登場する）
+// 移動速度は雑魚との戦いに時間を使えるよう大幅に低く設定してある
 // ============================================================
 const BOSS_DEFS = {
+    // --- 1〜3: 準備期間のボス。ゴブリンの上位種という位置づけで、
+    //     4のゴブリン大王につながる小さな前振り ---
     1: {
-        name:'ゴブリン大王', hp:500, dmg:22, speed:0.56, special:'summon',
+        name:'ゴブリンの偵察隊長', hp:120, dmg:10, speed:0.20, special:null,
+        palette:PALETTES.boss_goblin, sprite:SPRITES.goblin
+    },
+    2: {
+        name:'ゴブリンの戦隊長', hp:200, dmg:14, speed:0.20, special:null,
+        palette:PALETTES.boss_goblin, sprite:SPRITES.goblin
+    },
+    3: {
+        name:'ゴブリンの将軍', hp:300, dmg:18, speed:0.20, special:'summon',
+        palette:PALETTES.boss_goblin, sprite:SPRITES.goblin,
+        summonType:'goblin', summonCount:1, summonInterval:400
+    },
+
+    // --- 4〜10: 本編のボス。旧STORY(全7ステージ)のボスをそのまま踏襲 ---
+    4: {
+        name:'ゴブリン大王', hp:500, dmg:22, speed:0.18, special:'summon',
         palette:PALETTES.boss_goblin, sprite:SPRITES.boss_orc,
         summonType:'goblin', summonCount:2, summonInterval:300
     },
-    2: {
-        name:'ストーンゴーレム', hp:850, dmg:34, speed:0.32, special:'armor',
+    5: {
+        name:'ストーンゴーレム', hp:850, dmg:34, speed:0.12, special:'armor',
         palette:PALETTES.boss_golem, sprite:SPRITES.giant,
         armorReduction:0.55 // 被ダメージを 55% に軽減
     },
-    3: {
-        name:'シャドウアサシン', hp:1150, dmg:42, speed:0.88, special:'teleport',
+    6: {
+        name:'シャドウアサシン', hp:1150, dmg:42, speed:0.28, special:'teleport',
         palette:PALETTES.boss_assassin, sprite:SPRITES.boss_skeleton,
         teleportInterval:260
     },
-    4: {
-        name:'フレイムドレイク', hp:2200, dmg:48, speed:0.48, special:'fire',
+    7: {
+        name:'フレイムドレイク', hp:2200, dmg:48, speed:0.16, special:'fire',
         palette:PALETTES.boss_drake, sprite:SPRITES.boss_dragon,
         fireInterval:170, fireDamage:38, fireRadius:100
     },
-    5: {
-        name:'ネクロロード', hp:2900, dmg:52, speed:0.40, special:'revive',
+    8: {
+        name:'ネクロロード', hp:2900, dmg:52, speed:0.14, special:'revive',
         palette:PALETTES.boss_necro, sprite:SPRITES.boss_skeleton,
         reviveInterval:260, reviveCount:3
     },
-    6: {
-        name:'エンシェントコンストラクト', hp:3400, dmg:66, speed:0.24, special:'laser',
+    9: {
+        name:'エンシェントコンストラクト', hp:3400, dmg:66, speed:0.10, special:'laser',
         palette:PALETTES.boss_construct, sprite:SPRITES.giant,
         laserInterval:280, laserDamage:95
     },
-    7: {
-        name:'カオスタイタン', hp:6200, dmg:95, speed:0.36, special:'phases',
+    10: {
+        name:'カオスタイタン', hp:6200, dmg:95, speed:0.13, special:'phases',
         palette:PALETTES.boss_titan, sprite:SPRITES.boss_demon,
         phases: [
             { hpThreshold:1.0,  speedMult:1.0, damageMult:1.0 },
