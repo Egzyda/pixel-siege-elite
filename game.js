@@ -992,10 +992,12 @@ function buildAiRoster() {
     const pool = counteredPool(preset, state.round > 1 ? state.roster : []);
     const comp = analyzeRoster(state.roster);
 
-    const lay = layout();
     const cap = maxUnitsFor(state.mode);
+
+    // まず購入だけを行う（配置は全種類が出揃ってから決める）
+    const purchased = [];
     let guard = 400;
-    while(guard-- > 0 && state.aiRoster.length < cap) {
+    while(guard-- > 0 && purchased.length < cap) {
         const affordable = pool.filter(p => aiUnitBuyCost(p.key) <= state.aiGold);
         if(affordable.length === 0) break;
 
@@ -1006,29 +1008,10 @@ function buildAiRoster() {
         for(const p of affordable) { r -= p.w; if(r <= 0) { pick = p; break; } }
 
         state.aiGold -= aiUnitBuyCost(pick.key);
-
-        // 近接・タンクは前列、遠距離・回復は後列に配置する
-        const t = UNIT_DEFS[pick.key].type;
-        const isFront = (t === 'melee' || t === 'tank');
-        const band = lay.enemyBottom - lay.enemyTop;
-
-        // 前衛はプレイヤーの遠距離ユニットが固まっている側へ寄せる
-        let x;
-        if(isFront && comp.rangedX !== null && Math.random() < 0.7) {
-            x = clamp(comp.rangedX + randRange(-45, 45), 28, state.w - 28);
-        } else {
-            x = randRange(28, state.w - 28);
-        }
-
-        state.aiRoster.push({
-            id: state.nextId++,
-            key: pick.key,
-            x: x,
-            y: isFront
-                ? randRange(lay.enemyTop + band * 0.55, lay.enemyBottom)
-                : randRange(lay.enemyTop, lay.enemyTop + band * 0.45)
-        });
+        purchased.push(pick.key);
     }
+
+    placeAiRoster(purchased, comp);
 
     // 配置上限に達して予算が余った場合は編成強化に回す（プレイヤーの「強化」に相当）
     const powerMax = AI_POWER_MAX[state.mode] || 2.0;
@@ -1036,6 +1019,48 @@ function buildAiRoster() {
         state.aiGold -= AI_POWER_UNIT;
         state.aiPower = Math.min(powerMax, state.aiPower + AI_POWER_GAIN);
     }
+}
+
+// AI編成の配置を決める。近接・タンクは前列、遠距離・回復は後列、という
+// だけでは前衛と後衛のX座標が無関係になり、「タンクが右で回復役が左」の
+// ような噛み合わない布陣になってしまう。前衛をいくつかの縦レーンに割り振り、
+// 後衛は必ずそのレーンのどれかの真後ろにつけることで、前衛が受けている間に
+// 後衛が安全に攻撃できる実戦的な布陣にする
+function placeAiRoster(purchased, comp) {
+    const lay = layout();
+    const band = lay.enemyBottom - lay.enemyTop;
+    const front = purchased.filter(k => { const t = UNIT_DEFS[k].type; return t === 'melee' || t === 'tank'; });
+    const back = purchased.filter(k => { const t = UNIT_DEFS[k].type; return t !== 'melee' && t !== 'tank'; });
+
+    // 前衛を配置するレーン(X座標)を用意する。プレイヤーの遠距離ユニットが
+    // 固まっている側へ寄せることが多いが、たまに外して読まれにくくする
+    const laneCount = Math.max(1, Math.min(front.length || 1, 5));
+    const lanes = [];
+    for(let i = 0; i < laneCount; i++) {
+        const x = (comp.rangedX !== null && Math.random() < 0.7)
+            ? clamp(comp.rangedX + randRange(-50, 50), 28, state.w - 28)
+            : randRange(28, state.w - 28);
+        lanes.push(x);
+    }
+
+    front.forEach((key, i) => {
+        state.aiRoster.push({
+            id: state.nextId++, key,
+            x: clamp(lanes[i % lanes.length] + randRange(-18, 18), 28, state.w - 28),
+            y: randRange(lay.enemyTop + band * 0.55, lay.enemyBottom)
+        });
+    });
+    // 後衛は前衛と同じレーンの真後ろへ。前衛が1体もいない場合だけ
+    // レーンに根拠が無いので範囲内でランダムにする
+    back.forEach((key, i) => {
+        const x = front.length > 0
+            ? clamp(lanes[i % lanes.length] + randRange(-25, 25), 28, state.w - 28)
+            : randRange(28, state.w - 28);
+        state.aiRoster.push({
+            id: state.nextId++, key, x,
+            y: randRange(lay.enemyTop, lay.enemyTop + band * 0.45)
+        });
+    });
 }
 
 // AI 編成の配置を画面サイズに合わせて収める
