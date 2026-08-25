@@ -115,8 +115,6 @@ function toast(msg) {
 // 強化（アップグレード）の効果計算
 // ============================================================
 const upCount     = k => state.upgrades[k] || 0;
-const atkMult     = () => Math.min(ATK_MULT_CAP, Math.pow(1.15, upCount('atk_boost')));
-const hpMult      = () => Math.min(HP_MULT_CAP, Math.pow(1.18, upCount('hp_boost')));
 const rateMult    = () => Math.max(RATE_MULT_MIN, Math.pow(0.90, upCount('atk_speed')));
 const moveMult    = () => Math.min(MOVE_MULT_CAP, Math.pow(1.16, upCount('speed_boost')));
 const rangeMult   = () => Math.min(RANGE_MULT_CAP, Math.pow(1.14, upCount('range_ext')));
@@ -130,13 +128,9 @@ const vampireRate = () => Math.min(0.5, 0.10 * upCount('vampire'));
 const unitLevel     = k => (state.unitLevels && state.unitLevels[k]) || 0;
 const unitLevelMult = k => Math.min(UNIT_LEVEL_MULT_CAP, Math.pow(1 + UNIT_LEVEL_STAT_GAIN, unitLevel(k)));
 
-// このユニット種のレベルアップが実際に意味を持つ上限。全体強化(攻撃/HP)を
-// 既に積んでいるほど、PLAYER_ATK_TOTAL_CAP / PLAYER_HP_TOTAL_CAP との掛け算
-// 上限に先に達してしまうため、レベルアップ単体で押し上げられる余地は狭まる。
-// これを見ずに UNIT_LEVEL_MULT_CAP だけを基準に「強化する」ボタンを出し続けると、
-// 全体強化を積んでいるプレイヤーほど無駄打ちしやすくなってしまう
-const effectiveUnitLevelCap = key =>
-    Math.min(UNIT_LEVEL_MULT_CAP, PLAYER_ATK_TOTAL_CAP / atkMult(), PLAYER_HP_TOTAL_CAP / hpMult());
+// このユニット種のレベルアップが意味を持つ上限。攻撃力・HPの育成は
+// ユニット個別レベルのみが担うため、単独上限がそのまま実効上限になる
+const effectiveUnitLevelCap = key => UNIT_LEVEL_MULT_CAP;
 
 // AI（VERSUS限定）が投資したユニット個別レベル。計算式はプレイヤーと共通
 const aiUnitLevel     = k => (state.aiUnitLevels && state.aiUnitLevels[k]) || 0;
@@ -148,19 +142,28 @@ const aiUnitBuyCost = key => Math.round(UNIT_DEFS[key].cost * aiUnitLevelMult(ke
 // プレイヤーが現在編成に持っているそのユニット種の数
 const unitOwnedCount = key => state.roster.filter(r => r.key === key).length;
 
-// 全体強化(攻撃/HP)による「今の1体の強さ」の目安。attackとHPの上昇率は
-// 別々の全体強化で独立して伸びるため、両方の幾何平均を目安として使う
-const globalPowerMult = () => Math.sqrt(atkMult() * hpMult());
+// 実際の購入価格。ユニット個別レベルで強化済みなほど新規購入も割高になる
+// （そうしないと「1体だけ安く強化してから量産する」ことで価格設計を
+// 踏み倒せてしまうため。強化コストが所持数に比例するのと合わせて、
+// 後から買い足しても損得が生じないようにしてある）
+const unitBuyCost = key => Math.round(UNIT_DEFS[key].cost * unitLevelMult(key));
 
-// 実際の購入価格。ユニット個別レベル・全体強化(攻撃/HP)で強化済みなほど
-// 新規購入も割高になる（そうしないと「1体だけ安く強化してから量産する」
-// ことで価格設計を踏み倒せてしまうため。強化コストが所持数に比例するのと
-// 合わせて、後から買い足しても損得が生じないようにしてある）
-const unitBuyCost = key => Math.round(UNIT_DEFS[key].cost * unitLevelMult(key) * globalPowerMult());
+// STORY: 敵の強さをプレイヤーの育成度(ユニット個別レベル)に連動させる。
+// 編成にいる各ユニットのunitLevelMult()の平均をそのまま倍率として使うため、
+// 何も強化していなければ1倍(＝これまでの難易度のまま)、注ぎ込むほど敵も
+// 比例して強くなる。台本ウェーブは固定でもプレイヤーを見て強さが決まる
+// ようにし、「強化すればするほど一方的になる」問題を構造から解消する
+function storyPowerMult() {
+    if(state.mode !== 'story' || !state.roster || state.roster.length === 0) return 1;
+    let total = 0;
+    for(const r of state.roster) total += unitLevelMult(r.key);
+    return total / state.roster.length;
+}
 
 // AI 対戦モードで敵ユニットに掛かる強化倍率
 // （ラウンド進行によるスケーリング + AI が余剰予算を注ぎ込んだ分）
 function enemyPowerMult() {
+    if(state.mode === 'story') return storyPowerMult();
     if(!isVsMode()) return 1;
     const p = AI_PRESETS[state.difficulty];
     return (state.aiPower || 1) * (1 + p.powerStep * (state.round - 1));
@@ -299,23 +302,20 @@ class Unit {
         this.y = y;
         this.rid = o.rid || 0;              // 編成データとの対応 ID
 
-        // プレイヤー側は強化・ユニット個別レベルの効果を受ける。
-        // 敵側もVERSUSではAIが投資したユニット個別レベルの効果を受ける
-        // （SURVIVAL/STORYではaiUnitLevelsが空のまま=常に等倍）
+        // プレイヤー側はユニット個別レベルの効果を受ける。
+        // 敵側はSTORYではプレイヤーの育成度に応じたenemyPowerMult()、
+        // VERSUSではAIが投資したユニット個別レベルの効果を受ける
+        // （SURVIVALではaiUnitLevelsが空のまま=常に等倍）
         const ep = isP ? 1 : enemyPowerMult();
         const lm = isP ? unitLevelMult(key) : aiUnitLevelMult(key);
-        // 全体強化とユニット個別レベルは掛け算で効くため、片方だけに
-        // 全振りしても両方に分散させても最終的な強さが変わらないよう、
-        // 合計倍率自体にも上限を設ける（プレイヤー側のみ）
-        const am = isP ? Math.min(PLAYER_ATK_TOTAL_CAP, atkMult() * lm) : ep * lm;
-        const hm = isP ? Math.min(PLAYER_HP_TOTAL_CAP, hpMult() * lm) : ep * lm;
+        const mult = isP ? lm : ep * lm; // 攻撃力・HPともこの倍率で伸びる
         const rm = isP ? rateMult() : 1;
         const sm = isP ? moveMult() : 1;
         const gm = isP ? rangeMult() : 1;
 
-        this.max = Math.round(this.def.hp * hm);
+        this.max = Math.round(this.def.hp * mult);
         this.hp = this.max;
-        this.dmg = this.def.dmg * am;
+        this.dmg = this.def.dmg * mult;
         this.rate = this.def.rate * rm;
         this.speed = this.def.speed * sm;
         this.range = this.def.range * (this.def.type === 'ranged' || this.def.type === 'aoe' || this.def.type === 'healer' ? gm : 1);
@@ -582,9 +582,13 @@ function onUnitDeath(u) {
 class Boss {
     constructor(waveNum) {
         this.data = BOSS_DEFS[waveNum];
-        this.hp = this.data.hp;
-        this.maxHp = this.data.hp;
-        this.dmg = this.data.dmg;
+        // 雑魚敵と同じ基準(storyPowerMult)でボスの攻撃力・HP・直接ダメージを
+        // 与える特殊技(炎/レーザー)もプレイヤーの育成度に応じて強くする。
+        // 速度や召喚数・蘇生数・装甲軽減率など「量」「割合」系の数値は据え置き
+        this.pm = storyPowerMult();
+        this.hp = this.data.hp * this.pm;
+        this.maxHp = this.data.hp * this.pm;
+        this.dmg = this.data.dmg * this.pm;
         this.speed = this.data.speed;
         this.special = this.data.special;
         this.x = state.w / 2;
@@ -622,7 +626,7 @@ class Boss {
                 if(ratio <= this.data.phases[i].hpThreshold && this.phase !== i) {
                     this.phase = i;
                     this.speed = this.data.speed * this.data.phases[i].speedMult;
-                    this.dmg = this.data.dmg * this.data.phases[i].damageMult;
+                    this.dmg = this.data.dmg * this.pm * this.data.phases[i].damageMult;
                     spawnPop(this.x, this.y - 60, `PHASE ${i + 1}!`, '#ef4444');
                     addShake(8);
                     break;
@@ -695,7 +699,7 @@ class Boss {
                 if(this.specialTimer > d.fireInterval) {
                     this.specialTimer = 0;
                     state.units.filter(u => u.isP && dist(u, this) < d.fireRadius)
-                        .forEach(u => u.takeDmg(d.fireDamage, this));
+                        .forEach(u => u.takeDmg(d.fireDamage * this.pm, this));
                     spawnPop(this.x, this.y - 60, 'FLAME!', '#f97316');
                     addShake(5);
                     for(let i = 0; i < 14; i++) {
@@ -723,9 +727,10 @@ class Boss {
                 if(this.specialTimer > d.laserInterval) {
                     this.specialTimer = 0;
                     const b = state.playerBase;
+                    const laserDmg = d.laserDamage * this.pm;
                     state.units.filter(u => u.isP && Math.abs(u.x - b.x) < 34)
-                        .forEach(u => u.takeDmg(d.laserDamage, this));
-                    b.takeDmg(d.laserDamage, this);
+                        .forEach(u => u.takeDmg(laserDmg, this));
+                    b.takeDmg(laserDmg, this);
                     state.fx.push({ type:'laser', x1:this.x, y1:this.y - 18, x2:b.x, y2:b.y, life:22, color:'#60a5fa' });
                     spawnPop(this.x, this.y - 60, 'LASER!', '#60a5fa');
                     addShake(10);
@@ -1710,12 +1715,11 @@ function buildUnitCard(key, opts) {
     // 敵側はVERSUSでAIが投資した分を反映する（それ以外のモードは常に0）
     const lvl = o.enemy ? aiUnitLevel(key) : unitLevel(key);
     const lvlMult = o.enemy ? aiUnitLevelMult(key) : unitLevelMult(key);
-    // プレイヤー側は全体強化(攻撃/HP)とも掛け合わさった、実際に戦闘で
-    // 使われる数値を表示する（敵側は全体強化の影響を受けないためそのまま）
-    const dispAtkMult = o.enemy ? lvlMult : Math.min(PLAYER_ATK_TOTAL_CAP, atkMult() * lvlMult);
-    const dispHpMult  = o.enemy ? lvlMult : Math.min(PLAYER_HP_TOTAL_CAP, hpMult() * lvlMult);
-    const dispHp = Math.round(def.hp * dispHpMult);
-    const dispDmg = Math.round(Math.abs(def.dmg) * dispAtkMult) * (def.dmg < 0 ? -1 : 1);
+    // 敵側はSTORYではプレイヤーの育成度に応じて敵も強くなる(enemyPowerMult)ぶんも
+    // 表示に反映し、実際の戦闘値と一致させる
+    const dispMult = o.enemy ? lvlMult * enemyPowerMult() : lvlMult;
+    const dispHp = Math.round(def.hp * dispMult);
+    const dispDmg = Math.round(Math.abs(def.dmg) * dispMult) * (def.dmg < 0 ? -1 : 1);
 
     const card = document.createElement('div');
     card.className = 'shop-card';
