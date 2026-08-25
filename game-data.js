@@ -264,9 +264,9 @@ const BOSS_DEFS = {
 // 「支払った額に対する効果」が急に悪くなることはない（＝いつ注ぎ込んでも損しない）
 const UPGRADE_PRICE_SCALE = 1.12;
 
+// 攻撃力・HPの育成はユニット個別レベル（下記）に一本化してある。
+// 「強化」タブは、個別レベルと重複しない項目（速度・射程・拠点系）のみを扱う
 const UPGRADE_DEFS = {
-    atk_boost:   { name:'攻撃強化', icon:'⚔️', cost:40, desc:'全ユニットの攻撃力 +15%（上限+100%）' },
-    hp_boost:    { name:'装甲強化', icon:'❤️', cost:40, desc:'全ユニットのHP +18%（上限+120%）' },
     atk_speed:   { name:'速射訓練', icon:'⚡', cost:45, desc:'攻撃間隔 -10%（上限-50%。攻撃が速くなる）' },
     speed_boost: { name:'進軍訓練', icon:'💨', cost:35, desc:'全ユニットの移動速度 +16%（上限+60%）' },
     range_ext:   { name:'射程延長', icon:'🎯', cost:40, desc:'遠距離・範囲ユニットの射程 +14%（上限+50%）' },
@@ -276,10 +276,8 @@ const UPGRADE_DEFS = {
     vampire:     { name:'吸血の紋章', icon:'🧛', cost:40, desc:'与えたダメージの10%を自己回復（上限50%）' }
 };
 
-// atk_boost 等は複利で伸びるため、thorns/vampire と同様に上限を設ける
+// 複利で伸びる項目は thorns/vampire と同様に上限を設ける
 // （fortified/regen は加算のみで際限なく伸びないため対象外）
-const ATK_MULT_CAP  = 2.0;  // 攻撃力 最大 +100%
-const HP_MULT_CAP   = 2.2;  // HP 最大 +120%
 const RATE_MULT_MIN = 0.5;  // 攻撃間隔は最短でも元の50%まで
 const MOVE_MULT_CAP = 1.6;  // 移動速度 最大 +60%
 const RANGE_MULT_CAP = 1.5; // 射程 最大 +50%
@@ -306,16 +304,6 @@ const UNIT_LEVEL_STAT_GAIN   = 0.15; // レベルごとの HP・攻撃力 上昇
 const UNIT_LEVEL_COST_BASE   = 0.15; // 初回レベルアップ価格 = 購入価格 × 所持数 × これ
 const UNIT_LEVEL_COST_GROWTH = 1.15; // レベルが上がるごとに価格 × これ（複利）
 const UNIT_LEVEL_MULT_CAP    = 4;    // ステータス倍率の上限（約10回の強化で到達）
-
-// ユニット個別レベルと全体強化(攻撃/HP)は別々の上限を持つが、両方を
-// 同じユニット種に注ぎ込むと掛け算で効いて上限同士の積（最大8倍・8.8倍）
-// まで際限なく強くなってしまう。少数精鋭（例: ナイト3体・アーチャー3体
-// だけ）にすべてを注ぎ込むと、フルの15体編成を前提にしたSTORYの難易度を
-// あっさり超えてしまっていたのはこれが原因。個別レベル×全体強化の
-// 「合計倍率」自体にも上限を設け、片方だけに全振りしても両方に分散
-// させても、最終的な強さの天井が変わらないようにする
-const PLAYER_ATK_TOTAL_CAP = 2.5; // atkMult() × unitLevelMult(key) の上限
-const PLAYER_HP_TOTAL_CAP  = 2.5; // hpMult()  × unitLevelMult(key) の上限
 
 function unitLevelCost(key, level, count) {
     const n = Math.max(1, count || 0);
