@@ -268,39 +268,41 @@ const BOSS_DEFS = {
         summonType:'goblin', summonCount:1, summonInterval:400
     },
 
-    // --- 4〜10: 本編のボス。旧STORY(全7ステージ)のボスをそのまま踏襲 ---
+    // --- 4〜10: 本編のボス。旧STORY(全7ステージ)のボスをそのまま踏襲しつつ、
+    //     移動速度を落とした分(ノロマ化)、雑魚を片付けた後も一方的に
+    //     殴られるだけの的にならないよう、耐久・攻撃力を底上げしてある ---
     4: {
-        name:'ゴブリン大王', hp:500, dmg:22, speed:0.18, special:'summon',
+        name:'ゴブリン大王', hp:1600, dmg:36, speed:0.18, special:'summon',
         palette:PALETTES.boss_goblin, sprite:SPRITES.boss_orc,
         summonType:'goblin', summonCount:2, summonInterval:300
     },
     5: {
-        name:'ストーンゴーレム', hp:850, dmg:34, speed:0.12, special:'armor',
+        name:'ストーンゴーレム', hp:2200, dmg:50, speed:0.12, special:'armor',
         palette:PALETTES.boss_golem, sprite:SPRITES.giant,
         armorReduction:0.55 // 被ダメージを 55% に軽減
     },
     6: {
-        name:'シャドウアサシン', hp:1150, dmg:42, speed:0.28, special:'teleport',
+        name:'シャドウアサシン', hp:2800, dmg:62, speed:0.28, special:'teleport',
         palette:PALETTES.boss_assassin, sprite:SPRITES.boss_skeleton,
         teleportInterval:260
     },
     7: {
-        name:'フレイムドレイク', hp:2200, dmg:48, speed:0.16, special:'fire',
+        name:'フレイムドレイク', hp:4200, dmg:64, speed:0.16, special:'fire',
         palette:PALETTES.boss_drake, sprite:SPRITES.boss_dragon,
         fireInterval:170, fireDamage:38, fireRadius:100
     },
     8: {
-        name:'ネクロロード', hp:2900, dmg:52, speed:0.14, special:'revive',
+        name:'ネクロロード', hp:5200, dmg:68, speed:0.14, special:'revive',
         palette:PALETTES.boss_necro, sprite:SPRITES.boss_skeleton,
         reviveInterval:260, reviveCount:3
     },
     9: {
-        name:'エンシェントコンストラクト', hp:3400, dmg:66, speed:0.10, special:'laser',
+        name:'エンシェントコンストラクト', hp:3500, dmg:66, speed:0.10, special:'laser',
         palette:PALETTES.boss_construct, sprite:SPRITES.giant,
         laserInterval:280, laserDamage:95
     },
     10: {
-        name:'カオスタイタン', hp:6200, dmg:95, speed:0.13, special:'phases',
+        name:'カオスタイタン', hp:6300, dmg:96, speed:0.13, special:'phases',
         palette:PALETTES.boss_titan, sprite:SPRITES.boss_demon,
         phases: [
             { hpThreshold:1.0,  speedMult:1.0, damageMult:1.0 },
@@ -401,8 +403,8 @@ const AI_PRESETS = {
               {key:'warlord', w:1}, {key:'lich', w:1}, {key:'imp', w:1}]
     },
     hard: {
-        label:'HARD', desc:'高コスト特化。徹底的に対策してくる',
-        budgetMult:1.05, powerStep:0.04, counterStrength:0.65, levelInvestRatio:0.35,
+        label:'HARD', desc:'高コスト特化。初手から本気で対策し、勝ちにくる',
+        budgetMult:1.3, powerStep:0.06, counterStrength:0.8, levelInvestRatio:0.45,
         pool:[{key:'wizard', w:3}, {key:'giant', w:2}, {key:'knight', w:2},
               {key:'archer', w:2}, {key:'healer', w:1}, {key:'orc', w:1},
               {key:'warlord', w:2}, {key:'lich', w:2}, {key:'drake', w:2}, {key:'imp', w:1}]
@@ -463,7 +465,7 @@ const AI_PERSONALITIES = [
 const AI_COUNTER_VARIANCE = {
     easy:   { skipChance: 0,    varianceMin: 1,    varianceMax: 1 },
     normal: { skipChance: 0.25, varianceMin: 0.7,  varianceMax: 1.3 },
-    hard:   { skipChance: 0.08, varianceMin: 0.85, varianceMax: 1.25 }
+    hard:   { skipChance: 0.02, varianceMin: 0.9,  varianceMax: 1.3  }
 };
 
 // AI が余らせた予算を編成強化に変換する設定
