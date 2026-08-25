@@ -826,14 +826,13 @@ function fireTactic(key) {
 // 編成データからバトル用ユニットを生成する
 function deployRoster() {
     state.units = [];
-    // 編成の座標は準備フェーズ(等倍ワールド)で記録されているため、
-    // STORYバトル中のようにワールドが拡大されている場合はその分だけ換算する
-    const fs = fieldScale();
+    // 準備フェーズとバトルは常に同じfieldScaleのワールド座標を使うため、
+    // 編成の座標(r.x, r.y)をそのまま使ってよい
     state.roster.forEach(r => {
-        state.units.push(new Unit(r.key, true, r.x / fs, r.y / fs, { rid: r.id }));
+        state.units.push(new Unit(r.key, true, r.x, r.y, { rid: r.id }));
     });
     state.aiRoster.forEach(r => {
-        state.units.push(new Unit(r.key, false, r.x / fs, r.y / fs, { rid: r.id }));
+        state.units.push(new Unit(r.key, false, r.x, r.y, { rid: r.id }));
     });
 }
 
@@ -2835,12 +2834,13 @@ function loop() {
 // ============================================================
 // 初期化
 // ============================================================
-// STORYのバトル中だけ、ワールド座標(state.w/state.h)を実画面より大きく取り、
-// 描画だけ均一に縮小してぴったり収める。拠点間の距離が伸びる一方で
-// スクロールは発生せず、当たり判定・移動・ポインタ入力は全てこの広い
-// ワールド座標のまま行われるので他のロジックは変更不要
+// ワールド座標(state.w/state.h)を実画面より大きく取り、描画だけ均一に
+// 縮小してぴったり収める。拠点間の距離が伸びる一方でスクロールは発生せず、
+// 当たり判定・移動・ポインタ入力は全てこの広いワールド座標のまま行われる
+// ので他のロジックは変更不要。モード・シーンによって値を変えると準備
+// フェーズとバトルでユニットの位置がずれて見えるため、常に同じ倍率を使う
 function fieldScale() {
-    return (state.mode === 'story' && state.scene === 'battle') ? STORY_FIELD_SCALE : 1;
+    return FIELD_SCALE;
 }
 
 function resize() {
