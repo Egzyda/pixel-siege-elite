@@ -45,9 +45,6 @@ const state = {
     drag: null,               // ドラッグ中の配置ユニット
     undoStack: [],            // このラウンドの購入/売却操作の履歴（ひとつ戻す用）
 
-    spawnQueue: [],           // 未出現の敵集団（ステージモード）
-    spawnTimer: 0,
-    bossDelay: -1,            // ボス出現までのカウントダウン
     bossCleared: false,
 
     battleTimer: 0,           // 残り時間（フレーム）
@@ -829,11 +826,14 @@ function fireTactic(key) {
 // 編成データからバトル用ユニットを生成する
 function deployRoster() {
     state.units = [];
+    // 編成の座標は準備フェーズ(等倍ワールド)で記録されているため、
+    // STORYバトル中のようにワールドが拡大されている場合はその分だけ換算する
+    const fs = fieldScale();
     state.roster.forEach(r => {
-        state.units.push(new Unit(r.key, true, r.x, r.y, { rid: r.id }));
+        state.units.push(new Unit(r.key, true, r.x / fs, r.y / fs, { rid: r.id }));
     });
     state.aiRoster.forEach(r => {
-        state.units.push(new Unit(r.key, false, r.x, r.y, { rid: r.id }));
+        state.units.push(new Unit(r.key, false, r.x / fs, r.y / fs, { rid: r.id }));
     });
 }
 
@@ -1132,28 +1132,21 @@ function startBattle() {
     state.kills = 0;
     state.enemySiege = false;
     state.playerSiege = false;
+    // シーンをbattleにしてからresizeすることで、STORYならここでワールドが
+    // 拡大された状態になる（以降のdeployRoster/spawnStoryStageが正しい
+    // ワールド座標を使えるようにするため、他の処理より先に行う）
+    resize();
     deployRoster();
     resetTactics();
 
     if(state.mode === 'story') {
-        const conf = WAVE_CONFIGS[state.round];
-        state.spawnQueue = conf.enemyWaves.map(w => ({
-            delay: w.delay,
-            enemies: w.enemies.map(e => ({ type: e.type, count: e.count }))
-        }));
-        state.spawnTimer = 0;
-        state.bossDelay = -1;
-        // 最初の集団はバトル開始と同時に配置済みにする（唐突に湧いて見えないように）
-        if(state.spawnQueue.length > 0) spawnEnemyGroup(state.spawnQueue.shift());
-    } else {
-        state.spawnQueue = [];
+        spawnStoryStage(state.round);
     }
     state.battleTimer = BATTLE_TIME[state.mode] || 120 * 60;
     state.paused = false;
 
     hideUnitInfo();
     showBattleBar();
-    resize();
     setSpeed(1);
     updateHud();
 }
@@ -1335,12 +1328,12 @@ function showResultScreen() {
         if(r.isFinalStory) {
             title.textContent = 'ALL CLEAR';
             title.className = 'result-title win';
-            msg.textContent = '全7ステージ制覇！ 見事な采配だ。';
+            msg.textContent = `全${STORY_LAST_WAVE}ステージ制覇！ 見事な采配だ。`;
             showRetry = false;
         } else if(r.win || r.isDraw) {
             title.textContent = r.isDraw ? 'DRAW' : 'VICTORY';
             title.className = 'result-title win';
-            msg.textContent = `WAVE ${state.round - 1} クリア！`;
+            msg.textContent = `STAGE ${state.round - 1} クリア！`;
             showNext = true;
         } else {
             title.textContent = 'DEFEAT';
@@ -1434,7 +1427,7 @@ function renderRecords() {
 
     const storyText = rec.story.cleared
         ? `<span class="crown">★ 全クリア${rec.story.clearCount > 1 ? ' ×' + rec.story.clearCount : ''}</span>`
-        : (rec.story.bestWave > 0 ? `WAVE ${rec.story.bestWave} 到達` : '未プレイ');
+        : (rec.story.bestWave > 0 ? `STAGE ${rec.story.bestWave} 到達` : '未プレイ');
 
     panel.innerHTML = `
         <div class="records-title">PLAY RECORD</div>
@@ -2223,45 +2216,29 @@ function onPointerUp(e) {
 // ============================================================
 // バトル進行
 // ============================================================
-function spawnEnemyGroup(group) {
+// STORY: そのステージの雑魚とボスを、戦闘開始と同時に全員フィールドへ配置する。
+// タイマーで小出しにする代わりに、奥行き(depth)に応じてY座標を散らすことで、
+// 手前の敵から順に交戦が始まる自然な時間差を生む（ボスは最奥・最ノロマ）
+function spawnStoryStage(stageNum) {
+    const conf = STORY_STAGES[stageNum];
     const lay = layout();
-    group.enemies.forEach(g => {
+    const spawnFar = 150 + topInset();       // 奥（ボスに近い側）
+    const spawnNear = lay.deployTop - 20;    // 手前（配置エリアのすぐ上）
+    const span = spawnNear - spawnFar;
+
+    conf.enemies.forEach(g => {
         for(let i = 0; i < g.count; i++) {
+            const depth = clamp(g.depth + randRange(-0.06, 0.06), 0, 1);
             state.units.push(new Unit(g.type, false,
                 randRange(26, state.w - 26),
-                randRange(lay.enemyTop, lay.enemyBottom)));
+                spawnFar + span * depth));
         }
     });
-    spawnPop(state.w / 2, lay.enemyBottom + 20, 'ENEMY WAVE!', '#ef4444');
-    addShake(3);
-}
 
-function updateSpawner(dt) {
-    if(state.mode !== 'story') return;
-
-    if(state.spawnQueue.length > 0) {
-        state.spawnTimer += dt;
-        if(state.spawnTimer >= state.spawnQueue[0].delay) {
-            state.spawnTimer = 0;
-            spawnEnemyGroup(state.spawnQueue.shift());
-        }
-        return;
-    }
-
-    // 雑魚を全滅させたらボスが出現する
-    if(!state.boss && !state.bossCleared && state.bossDelay < 0) {
-        if(state.units.filter(u => !u.isP).length === 0) state.bossDelay = 60;
-    }
-    if(state.bossDelay > 0) {
-        state.bossDelay -= dt;
-        if(state.bossDelay <= 0) {
-            state.bossDelay = -1;
-            state.boss = new Boss(state.round);
-            spawnPop(state.w / 2, 150, 'BOSS APPEARS!', '#f59e0b');
-            addShake(10);
-            updateHud();
-        }
-    }
+    state.boss = new Boss(stageNum);
+    spawnPop(state.w / 2, spawnFar + 20, state.boss.data.name + ' 出現！', '#f59e0b');
+    addShake(6);
+    updateHud();
 }
 
 function updateProjectiles(dt) {
@@ -2341,7 +2318,6 @@ function updateFx(dt) {
 
 // バトル 1 フレーム分の更新
 function updateBattle(dt) {
-    updateSpawner(dt);
     updateTactics(dt);
     if(state.timeWarp > 0) state.timeWarp -= dt;
 
@@ -2484,7 +2460,7 @@ function updateHud() {
 
     const diff = AI_PRESETS[state.difficulty].label;
     if(state.mode === 'story') {
-        left.textContent = `STORY  WAVE ${state.round}/${STORY_LAST_WAVE}`;
+        left.textContent = `STORY  STAGE ${state.round}/${STORY_LAST_WAVE}`;
     } else if(state.mode === 'survival') {
         left.textContent = `SURVIVAL  R${state.round}  ${diff}`;
     } else {
@@ -2859,14 +2835,25 @@ function loop() {
 // ============================================================
 // 初期化
 // ============================================================
+// STORYのバトル中だけ、ワールド座標(state.w/state.h)を実画面より大きく取り、
+// 描画だけ均一に縮小してぴったり収める。拠点間の距離が伸びる一方で
+// スクロールは発生せず、当たり判定・移動・ポインタ入力は全てこの広い
+// ワールド座標のまま行われるので他のロジックは変更不要
+function fieldScale() {
+    return (state.mode === 'story' && state.scene === 'battle') ? STORY_FIELD_SCALE : 1;
+}
+
 function resize() {
     const rect = document.getElementById('stage').getBoundingClientRect();
     const dpr = Math.min(window.devicePixelRatio || 1, 3);
-    state.w = Math.max(240, Math.round(rect.width));
-    state.h = Math.max(320, Math.round(rect.height));
-    canvas.width = Math.round(state.w * dpr);
-    canvas.height = Math.round(state.h * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const viewW = Math.max(240, Math.round(rect.width));
+    const viewH = Math.max(320, Math.round(rect.height));
+    const fs = fieldScale();
+    state.w = Math.round(viewW / fs);
+    state.h = Math.round(viewH / fs);
+    canvas.width = Math.round(viewW * dpr);
+    canvas.height = Math.round(viewH * dpr);
+    ctx.setTransform(dpr * fs, 0, 0, dpr * fs, 0, 0);
     ctx.imageSmoothingEnabled = false;
 
     if(state.playerBase) state.playerBase.reposition();
