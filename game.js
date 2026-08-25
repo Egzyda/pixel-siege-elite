@@ -148,38 +148,11 @@ const unitOwnedCount = key => state.roster.filter(r => r.key === key).length;
 // 後から買い足しても損得が生じないようにしてある）
 const unitBuyCost = key => Math.round(UNIT_DEFS[key].cost * unitLevelMult(key));
 
-// STORY: 敵の強さをプレイヤーの育成度に連動させる。ユニット個別レベルだけを
-// 見ていると、反射装甲・吸血の紋章のような「強化」タブ側の投資（特に吸血は
-// 敵側に対応する仕組みが無く、いくら積んでも敵が一切強くならない）で
-// すり抜けられてしまうため、強化タブの投資度合いもあわせて見る。
-// ①編成の平均レベル倍率(1〜UNIT_LEVEL_MULT_CAP倍)
-// ②強化タブ5項目(速射/進軍/射程/反射/吸血)それぞれの上限までの進捗(0〜1)を
-//   平均し、①と同じレンジ(最大UNIT_LEVEL_MULT_CAP倍)に揃えたもの
-// を掛け合わせるため、レベルだけに全振りしても強化タブだけに全振りしても
-// 同じ天井(最大UNIT_LEVEL_MULT_CAP倍)まで敵が強くなり、両方に投資すれば
-// その分さらに敵も強くなる。何も強化していなければ従来通り1倍のまま
-function storyPowerMult() {
-    if(state.mode !== 'story' || !state.roster || state.roster.length === 0) return 1;
-    let total = 0;
-    for(const r of state.roster) total += unitLevelMult(r.key);
-    const levelMult = total / state.roster.length;
-
-    const upProgress = (
-        (1 - rateMult()) / (1 - RATE_MULT_MIN) +
-        (moveMult() - 1) / (MOVE_MULT_CAP - 1) +
-        (rangeMult() - 1) / (RANGE_MULT_CAP - 1) +
-        thornsRate() / 0.75 +
-        vampireRate() / 0.5
-    ) / 5;
-    const upMult = 1 + upProgress * (UNIT_LEVEL_MULT_CAP - 1);
-
-    return levelMult * upMult;
-}
-
 // AI 対戦モードで敵ユニットに掛かる強化倍率
 // （ラウンド進行によるスケーリング + AI が余剰予算を注ぎ込んだ分）
+// STORY は固定ウェーブを攻略する楽しさが核のため、プレイヤーの育成度に応じて
+// 敵を動的スケーリングすることはしない（常に1倍。詳細はCLAUDE.md参照）
 function enemyPowerMult() {
-    if(state.mode === 'story') return storyPowerMult();
     if(!isVsMode()) return 1;
     const p = AI_PRESETS[state.difficulty];
     return (state.aiPower || 1) * (1 + p.powerStep * (state.round - 1));
@@ -598,13 +571,9 @@ function onUnitDeath(u) {
 class Boss {
     constructor(waveNum) {
         this.data = BOSS_DEFS[waveNum];
-        // 雑魚敵と同じ基準(storyPowerMult)でボスの攻撃力・HP・直接ダメージを
-        // 与える特殊技(炎/レーザー)もプレイヤーの育成度に応じて強くする。
-        // 速度や召喚数・蘇生数・装甲軽減率など「量」「割合」系の数値は据え置き
-        this.pm = storyPowerMult();
-        this.hp = this.data.hp * this.pm;
-        this.maxHp = this.data.hp * this.pm;
-        this.dmg = this.data.dmg * this.pm;
+        this.hp = this.data.hp;
+        this.maxHp = this.data.hp;
+        this.dmg = this.data.dmg;
         this.speed = this.data.speed;
         this.special = this.data.special;
         this.x = state.w / 2;
@@ -642,7 +611,7 @@ class Boss {
                 if(ratio <= this.data.phases[i].hpThreshold && this.phase !== i) {
                     this.phase = i;
                     this.speed = this.data.speed * this.data.phases[i].speedMult;
-                    this.dmg = this.data.dmg * this.pm * this.data.phases[i].damageMult;
+                    this.dmg = this.data.dmg * this.data.phases[i].damageMult;
                     spawnPop(this.x, this.y - 60, `PHASE ${i + 1}!`, '#ef4444');
                     addShake(8);
                     break;
@@ -715,7 +684,7 @@ class Boss {
                 if(this.specialTimer > d.fireInterval) {
                     this.specialTimer = 0;
                     state.units.filter(u => u.isP && dist(u, this) < d.fireRadius)
-                        .forEach(u => u.takeDmg(d.fireDamage * this.pm, this));
+                        .forEach(u => u.takeDmg(d.fireDamage, this));
                     spawnPop(this.x, this.y - 60, 'FLAME!', '#f97316');
                     addShake(5);
                     for(let i = 0; i < 14; i++) {
@@ -743,10 +712,9 @@ class Boss {
                 if(this.specialTimer > d.laserInterval) {
                     this.specialTimer = 0;
                     const b = state.playerBase;
-                    const laserDmg = d.laserDamage * this.pm;
                     state.units.filter(u => u.isP && Math.abs(u.x - b.x) < 34)
-                        .forEach(u => u.takeDmg(laserDmg, this));
-                    b.takeDmg(laserDmg, this);
+                        .forEach(u => u.takeDmg(d.laserDamage, this));
+                    b.takeDmg(d.laserDamage, this);
                     state.fx.push({ type:'laser', x1:this.x, y1:this.y - 18, x2:b.x, y2:b.y, life:22, color:'#60a5fa' });
                     spawnPop(this.x, this.y - 60, 'LASER!', '#60a5fa');
                     addShake(10);
@@ -1731,11 +1699,8 @@ function buildUnitCard(key, opts) {
     // 敵側はVERSUSでAIが投資した分を反映する（それ以外のモードは常に0）
     const lvl = o.enemy ? aiUnitLevel(key) : unitLevel(key);
     const lvlMult = o.enemy ? aiUnitLevelMult(key) : unitLevelMult(key);
-    // 敵側はSTORYではプレイヤーの育成度に応じて敵も強くなる(enemyPowerMult)ぶんも
-    // 表示に反映し、実際の戦闘値と一致させる
-    const dispMult = o.enemy ? lvlMult * enemyPowerMult() : lvlMult;
-    const dispHp = Math.round(def.hp * dispMult);
-    const dispDmg = Math.round(Math.abs(def.dmg) * dispMult) * (def.dmg < 0 ? -1 : 1);
+    const dispHp = Math.round(def.hp * lvlMult);
+    const dispDmg = Math.round(Math.abs(def.dmg) * lvlMult) * (def.dmg < 0 ? -1 : 1);
 
     const card = document.createElement('div');
     card.className = 'shop-card';
