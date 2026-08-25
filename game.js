@@ -148,16 +148,32 @@ const unitOwnedCount = key => state.roster.filter(r => r.key === key).length;
 // 後から買い足しても損得が生じないようにしてある）
 const unitBuyCost = key => Math.round(UNIT_DEFS[key].cost * unitLevelMult(key));
 
-// STORY: 敵の強さをプレイヤーの育成度(ユニット個別レベル)に連動させる。
-// 編成にいる各ユニットのunitLevelMult()の平均をそのまま倍率として使うため、
-// 何も強化していなければ1倍(＝これまでの難易度のまま)、注ぎ込むほど敵も
-// 比例して強くなる。台本ウェーブは固定でもプレイヤーを見て強さが決まる
-// ようにし、「強化すればするほど一方的になる」問題を構造から解消する
+// STORY: 敵の強さをプレイヤーの育成度に連動させる。ユニット個別レベルだけを
+// 見ていると、反射装甲・吸血の紋章のような「強化」タブ側の投資（特に吸血は
+// 敵側に対応する仕組みが無く、いくら積んでも敵が一切強くならない）で
+// すり抜けられてしまうため、強化タブの投資度合いもあわせて見る。
+// ①編成の平均レベル倍率(1〜UNIT_LEVEL_MULT_CAP倍)
+// ②強化タブ5項目(速射/進軍/射程/反射/吸血)それぞれの上限までの進捗(0〜1)を
+//   平均し、①と同じレンジ(最大UNIT_LEVEL_MULT_CAP倍)に揃えたもの
+// を掛け合わせるため、レベルだけに全振りしても強化タブだけに全振りしても
+// 同じ天井(最大UNIT_LEVEL_MULT_CAP倍)まで敵が強くなり、両方に投資すれば
+// その分さらに敵も強くなる。何も強化していなければ従来通り1倍のまま
 function storyPowerMult() {
     if(state.mode !== 'story' || !state.roster || state.roster.length === 0) return 1;
     let total = 0;
     for(const r of state.roster) total += unitLevelMult(r.key);
-    return total / state.roster.length;
+    const levelMult = total / state.roster.length;
+
+    const upProgress = (
+        (1 - rateMult()) / (1 - RATE_MULT_MIN) +
+        (moveMult() - 1) / (MOVE_MULT_CAP - 1) +
+        (rangeMult() - 1) / (RANGE_MULT_CAP - 1) +
+        thornsRate() / 0.75 +
+        vampireRate() / 0.5
+    ) / 5;
+    const upMult = 1 + upProgress * (UNIT_LEVEL_MULT_CAP - 1);
+
+    return levelMult * upMult;
 }
 
 // AI 対戦モードで敵ユニットに掛かる強化倍率
