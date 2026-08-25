@@ -272,37 +272,37 @@ const BOSS_DEFS = {
     //     移動速度を落とした分(ノロマ化)、雑魚を片付けた後も一方的に
     //     殴られるだけの的にならないよう、耐久・攻撃力を底上げしてある ---
     4: {
-        name:'ゴブリン大王', hp:1600, dmg:36, speed:0.18, special:'summon',
+        name:'ゴブリン大王', hp:3500, dmg:100, speed:0.18, special:'summon',
         palette:PALETTES.boss_goblin, sprite:SPRITES.boss_orc,
         summonType:'goblin', summonCount:2, summonInterval:300
     },
     5: {
-        name:'ストーンゴーレム', hp:2200, dmg:50, speed:0.12, special:'armor',
+        name:'ストーンゴーレム', hp:4800, dmg:140, speed:0.12, special:'armor',
         palette:PALETTES.boss_golem, sprite:SPRITES.giant,
         armorReduction:0.55 // 被ダメージを 55% に軽減
     },
     6: {
-        name:'シャドウアサシン', hp:2800, dmg:62, speed:0.28, special:'teleport',
+        name:'シャドウアサシン', hp:6200, dmg:175, speed:0.28, special:'teleport',
         palette:PALETTES.boss_assassin, sprite:SPRITES.boss_skeleton,
         teleportInterval:260
     },
     7: {
-        name:'フレイムドレイク', hp:4200, dmg:64, speed:0.16, special:'fire',
+        name:'フレイムドレイク', hp:9200, dmg:180, speed:0.16, special:'fire',
         palette:PALETTES.boss_drake, sprite:SPRITES.boss_dragon,
-        fireInterval:170, fireDamage:38, fireRadius:100
+        fireInterval:170, fireDamage:100, fireRadius:100
     },
     8: {
-        name:'ネクロロード', hp:5200, dmg:68, speed:0.14, special:'revive',
+        name:'ネクロロード', hp:11500, dmg:190, speed:0.14, special:'revive',
         palette:PALETTES.boss_necro, sprite:SPRITES.boss_skeleton,
         reviveInterval:260, reviveCount:3
     },
     9: {
-        name:'エンシェントコンストラクト', hp:3500, dmg:66, speed:0.10, special:'laser',
+        name:'エンシェントコンストラクト', hp:7700, dmg:185, speed:0.10, special:'laser',
         palette:PALETTES.boss_construct, sprite:SPRITES.giant,
-        laserInterval:280, laserDamage:95
+        laserInterval:280, laserDamage:260
     },
     10: {
-        name:'カオスタイタン', hp:6300, dmg:96, speed:0.13, special:'phases',
+        name:'カオスタイタン', hp:14000, dmg:270, speed:0.13, special:'phases',
         palette:PALETTES.boss_titan, sprite:SPRITES.boss_demon,
         phases: [
             { hpThreshold:1.0,  speedMult:1.0, damageMult:1.0 },

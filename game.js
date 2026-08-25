@@ -121,6 +121,20 @@ const baseRegen   = () => 5 * upCount('regen');
 const thornsRate  = () => Math.min(0.75, 0.20 * upCount('thorns'));
 const vampireRate = () => Math.min(0.5, 0.10 * upCount('vampire'));
 
+// 強化タブのうち上限がある5項目について、現在値・上限・到達済みかを
+// まとめる（fortified/regenは加算のみで上限が無いためnullを返す）。
+// ショップ表示と購入時の上限チェックの両方で同じ値を使う
+function upgradeStatus(key) {
+    switch(key) {
+        case 'atk_speed':   return { pct: Math.round((1 - rateMult()) * 100), cap: Math.round((1 - RATE_MULT_MIN) * 100), maxed: rateMult() <= RATE_MULT_MIN + 1e-9 };
+        case 'speed_boost': return { pct: Math.round((moveMult() - 1) * 100), cap: Math.round((MOVE_MULT_CAP - 1) * 100), maxed: moveMult() >= MOVE_MULT_CAP - 1e-9 };
+        case 'range_ext':   return { pct: Math.round((rangeMult() - 1) * 100), cap: Math.round((RANGE_MULT_CAP - 1) * 100), maxed: rangeMult() >= RANGE_MULT_CAP - 1e-9 };
+        case 'thorns':      return { pct: Math.round(thornsRate() * 100), cap: 75, maxed: thornsRate() >= 0.75 - 1e-9 };
+        case 'vampire':     return { pct: Math.round(vampireRate() * 100), cap: 50, maxed: vampireRate() >= 0.5 - 1e-9 };
+        default:            return null;
+    }
+}
+
 // ユニット個別レベル（キーごとの購入回数）
 // 複利のまま無制限だと1種に注ぎ込み続けた際に際限なく強くなるため上限を設ける
 const unitLevel     = k => (state.unitLevels && state.unitLevels[k]) || 0;
@@ -604,16 +618,23 @@ class Boss {
 
         // フェーズ移行（カオスタイタン）
         if(this.special === 'phases' && this.data.phases) {
+            // 現在のHP割合に対応するフェーズを先に特定してから、それが
+            // 直前のフェーズと違う場合だけ演出を出す。
+            // （以前は「しきい値を満たす && 現在のフェーズと違う」を同時に
+            // 判定してbreakしていたため、フェーズ1以降ではphase0の条件
+            // (ratio<=1.0は常に真)に毎フレーム再マッチしてフェーズが0に
+            // 巻き戻り→また1へ…を無限に繰り返し、画面揺れが止まらなかった）
             const ratio = this.hp / this.maxHp;
+            let targetPhase = 0;
             for(let i = this.data.phases.length - 1; i >= 0; i--) {
-                if(ratio <= this.data.phases[i].hpThreshold && this.phase !== i) {
-                    this.phase = i;
-                    this.speed = this.data.speed * this.data.phases[i].speedMult;
-                    this.dmg = this.data.dmg * this.data.phases[i].damageMult;
-                    spawnPop(this.x, this.y - 60, `PHASE ${i + 1}!`, '#ef4444');
-                    addShake(8);
-                    break;
-                }
+                if(ratio <= this.data.phases[i].hpThreshold) { targetPhase = i; break; }
+            }
+            if(targetPhase !== this.phase) {
+                this.phase = targetPhase;
+                this.speed = this.data.speed * this.data.phases[targetPhase].speedMult;
+                this.dmg = this.data.dmg * this.data.phases[targetPhase].damageMult;
+                spawnPop(this.x, this.y - 60, `PHASE ${targetPhase + 1}!`, '#ef4444');
+                addShake(8);
             }
         }
 
@@ -1846,9 +1867,16 @@ function renderShop() {
             const def = UPGRADE_DEFS[key];
             const price = upgradePrice(key);
             const owned = upCount(key);
+            const status = upgradeStatus(key);
+            const maxed = !!(status && status.maxed);
             const card = document.createElement('div');
             card.className = 'shop-card';
             card.dataset.upgrade = key;
+            // 上限がある項目は「現在○%（上限○%）」を表示し、上限に達したら
+            // ユニット個別レベルと同じ「★ 最大まで強化済み」表示にして
+            // それ以上ゴールドを消費して買えないようにする
+            const progressLine = status
+                ? `<div class="card-comment" style="margin-top:2px">現在 ${status.pct}%（上限 ${status.cap}%）</div>` : '';
             card.innerHTML = `
                 <div class="card-head">
                     <div class="card-emoji">${def.icon}</div>
@@ -1856,10 +1884,12 @@ function renderShop() {
                         <div class="card-name">${def.name}</div>
                         <div class="card-sub">${owned ? `<span class="card-own">Lv.${owned}</span>` : '<span class="card-type">永続</span>'}</div>
                     </div>
-                    <div class="card-cost">${price}G</div>
+                    ${maxed ? '' : `<div class="card-cost">${price}G</div>`}
                 </div>
-                <div class="card-comment" style="margin-top:4px">${def.desc}</div>`;
-            card.addEventListener('click', () => buyUpgrade(key));
+                <div class="card-comment" style="margin-top:4px">${def.desc}</div>
+                ${progressLine}
+                ${maxed ? `<div class="card-lvup"><span class="lvup-maxed">★ 最大まで強化済み</span></div>` : ''}`;
+            if(!maxed) card.addEventListener('click', () => buyUpgrade(key));
             list.appendChild(card);
         });
 
@@ -2018,6 +2048,8 @@ function selectShopUnit(key) {
 }
 
 function buyUpgrade(key) {
+    const status = upgradeStatus(key);
+    if(status && status.maxed) { toast('これ以上は強化できません'); return; }
     const price = upgradePrice(key);
     if(state.gold < price) { toast('ゴールドが足りません'); return; }
     pushUndo();
@@ -2065,7 +2097,9 @@ function updatePrepUI() {
             const lvupBtn = card.querySelector('.lvup-btn');
             if(lvupBtn) lvupBtn.disabled = state.gold < unitLevelCost(key, unitLevel(key), unitOwnedCount(key));
         } else if(card.dataset.upgrade) {
-            card.classList.toggle('cant-buy', state.gold < upgradePrice(card.dataset.upgrade));
+            const key = card.dataset.upgrade;
+            const status = upgradeStatus(key);
+            card.classList.toggle('cant-buy', !(status && status.maxed) && state.gold < upgradePrice(key));
         } else if(card.dataset.tactic) {
             const t = card.dataset.tactic;
             card.classList.toggle('cant-buy', !state.tactics[t] && state.gold < TACTIC_DEFS[t].cost);
