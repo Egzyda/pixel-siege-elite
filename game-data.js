@@ -279,12 +279,14 @@ const BOSS_DEFS = {
     5: {
         name:'ストーンゴーレム', hp:4800, dmg:140, speed:0.12, special:'armor',
         palette:PALETTES.boss_golem, sprite:SPRITES.giant,
-        armorReduction:0.55 // 被ダメージを 55% に軽減
+        armorReduction:0.55, // 被ダメージを 55% に軽減
+        knockback:4 // 重量級らしく殴った相手を弾き飛ばす
     },
     6: {
         name:'シャドウアサシン', hp:6200, dmg:175, speed:0.28, special:'teleport',
         palette:PALETTES.boss_assassin, sprite:SPRITES.boss_skeleton,
-        teleportInterval:260
+        teleportInterval:260,
+        range:150 // 近接ではなく遠距離攻撃。ワープで裏をかいて撃ってくる
     },
     7: {
         name:'フレイムドレイク', hp:9200, dmg:180, speed:0.16, special:'fire',
@@ -294,7 +296,8 @@ const BOSS_DEFS = {
     8: {
         name:'ネクロロード', hp:11500, dmg:190, speed:0.14, special:'revive',
         palette:PALETTES.boss_necro, sprite:SPRITES.boss_skeleton,
-        reviveInterval:260, reviveCount:3
+        reviveInterval:260, reviveCount:3,
+        lifesteal:0.3 // 与えたダメージの30%を自己回復する死霊術師らしい個性
     },
     9: {
         name:'エンシェントコンストラクト', hp:7700, dmg:185, speed:0.10, special:'laser',
@@ -324,11 +327,11 @@ const UPGRADE_PRICE_SCALE = 1.12;
 // 「強化」タブは、個別レベルと重複しない項目（速度・射程・拠点系）のみを扱う
 const UPGRADE_DEFS = {
     atk_speed:   { name:'速射訓練', icon:'⚡', cost:45, desc:'攻撃間隔 -10%（上限-50%。攻撃が速くなる）' },
-    speed_boost: { name:'進軍訓練', icon:'💨', cost:35, desc:'全ユニットの移動速度 +16%（上限+60%）' },
-    range_ext:   { name:'射程延長', icon:'🎯', cost:40, desc:'遠距離・範囲ユニットの射程 +14%（上限+50%）' },
+    speed_boost: { name:'進軍訓練', icon:'💨', cost:35, desc:'全ユニットの移動速度 +10%（上限+60%）' },
+    range_ext:   { name:'射程延長', icon:'🎯', cost:40, desc:'遠距離・範囲ユニットの射程 +10%（上限+50%）' },
     fortified:   { name:'城壁補強', icon:'🏰', cost:45, desc:'自拠点の最大HP +250' },
     regen:       { name:'自動修復', icon:'🔧', cost:40, desc:'自拠点のHPが毎秒5回復' },
-    thorns:      { name:'反射装甲', icon:'🛡️', cost:40, desc:'味方が受けたダメージの20%を反射（上限75%）' },
+    thorns:      { name:'反射装甲', icon:'🛡️', cost:40, desc:'味方が受けたダメージの15%を反射（上限75%）' },
     vampire:     { name:'吸血の紋章', icon:'🧛', cost:40, desc:'与えたダメージの10%を自己回復（上限50%）' }
 };
 
