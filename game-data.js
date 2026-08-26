@@ -65,7 +65,7 @@ const UNIT_DEFS = {
     },
     wizard: {
         name:'メイジ', cost:55, hp:95, dmg:38, range:135, speed:0.42, rate:80,
-        type:'aoe', mass:0.7, kb:8, splash:46, sprite:SPRITES.wizard, pal:PALETTES.wizard,
+        type:'aoe', mass:0.7, kb:0, splash:46, sprite:SPRITES.wizard, pal:PALETTES.wizard,
         comment:'広範囲の魔法攻撃。群れに有効'
     },
     healer: {
@@ -101,7 +101,7 @@ const UNIT_DEFS = {
     // --- 戦術で召喚される特殊ユニット（ショップには並ばない） ---
     angel: {
         name:'エンジェル', cost:0, hp:900, dmg:70, range:130, speed:0.64, rate:40,
-        type:'ranged', mass:2.0, kb:5, sprite:SPRITES.angel, pal:PALETTES.angel,
+        type:'ranged', mass:2.0, kb:0, sprite:SPRITES.angel, pal:PALETTES.angel,
         comment:'戦術で召喚される守護天使'
     },
 
@@ -120,7 +120,7 @@ const UNIT_DEFS = {
     },
     drake: {
         name:'ドレイク', cost:85, hp:340, dmg:30, range:120, speed:0.44, rate:75,
-        type:'aoe', mass:1.5, kb:3, splash:52, scale:2.4, sprite:SPRITES.boss_dragon.idle, pal:PALETTES.boss_drake,
+        type:'aoe', mass:1.5, kb:0, splash:52, scale:2.4, sprite:SPRITES.boss_dragon.idle, pal:PALETTES.boss_drake,
         comment:'上空から範囲攻撃を叩き込む小型の竜'
     },
     imp: {
@@ -129,11 +129,19 @@ const UNIT_DEFS = {
         comment:'圧倒的な速さで急襲する俊敏な小悪魔。打たれ弱い'
     },
     stoneGuardian: {
-        // ゴーレムとの役割被りを避けるため、火力をほぼ捨てた純粋な壁に振り直した
-        // （ゴーレム=そこそこ殴れる万能タンク／ストーン=ほぼ攻撃しない代わりに圧倒的に硬い壁）
-        name:'ストーン', cost:60, hp:700, dmg:15, range:32, speed:0.26, rate:140,
-        type:'tank', mass:6.0, kb:10, armor:0.55, scale:2.3, sprite:SPRITES.giant, pal:PALETTES.boss_golem,
-        comment:'被ダメージを45%軽減する純粋な壁役。攻撃力はほぼ無いに等しいが圧倒的に硬く、後衛を守り抜く'
+        // ゴーレムとの役割被りを避けるため、単体性能は抑えて「数秒ごとにミニストーンを
+        // 生み出す」召喚役に振り直した（ゴーレム=1体で殴れる万能タンク／
+        // ストーン=自身は控えめだが、時間経過で増援を出し続ける物量の起点）
+        name:'ストーン', cost:60, hp:450, dmg:18, range:32, speed:0.26, rate:100,
+        type:'tank', mass:3.0, kb:0, scale:2.0, sprite:SPRITES.giant, pal:PALETTES.boss_golem,
+        summonType:'miniStone', summonInterval:240, summonCount:1,
+        comment:'4秒ごとに自分の周りにミニストーンを1体生み出す。自身の性能は控えめだが、戦いが長引くほど頭数で押せる'
+    },
+    miniStone: {
+        // ストーンが生み出す増援。ショップには並ばず購入不可(cost:0)
+        name:'ミニストーン', cost:0, hp:45, dmg:11, range:20, speed:0.70, rate:32,
+        type:'melee', mass:0.6, kb:0, scale:1.1, sprite:SPRITES.giant, pal:PALETTES.boss_golem,
+        comment:'ストーンが生み出す小さな増援。ゴブリンと同程度のステータス'
     },
     graveLord: {
         name:'ロード', cost:70, hp:380, dmg:42, range:30, speed:0.40, rate:65,
@@ -141,8 +149,10 @@ const UNIT_DEFS = {
         comment:'近接で殴るたびに与えたダメージの30%を自己回復する死霊騎士'
     },
     sentry: {
-        name:'セントリー', cost:90, hp:500, dmg:18, range:170, speed:0.26, rate:60,
-        type:'beam', mass:2.0, kb:0, beamRampRate:0.01, beamRampCap:2.5, scale:2.3, sprite:SPRITES.giant, pal:PALETTES.boss_construct,
+        // 「値段が高いだけで雑魚も倒せない」との声を受けて強化。
+        // 基礎火力・射程を底上げし、ランプ上限も撤廃(狙い続ける限り際限なく伸びる)
+        name:'セントリー', cost:90, hp:500, dmg:26, range:230, speed:0.26, rate:60,
+        type:'beam', mass:2.0, kb:0, beamRampRate:0.015, beamRampCap:Infinity, scale:2.3, sprite:SPRITES.giant, pal:PALETTES.boss_construct,
         comment:'狙いを外さず照射し続けるほどダメージが増す長射程ビーム。対象を切り替えると威力はリセットされる'
     }
 };
