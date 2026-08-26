@@ -130,12 +130,12 @@ const UNIT_DEFS = {
     },
     stoneGuardian: {
         // ゴーレムとの役割被りを避けるため、単体性能は抑えて「数秒ごとにミニストーンを
-        // 生み出す」召喚役に振り直した（ゴーレム=1体で殴れる万能タンク／
-        // ストーン=自身は控えめだが、時間経過で増援を出し続ける物量の起点）
-        name:'ストーン', cost:60, hp:450, dmg:18, range:32, speed:0.26, rate:100,
-        type:'tank', mass:3.0, kb:0, scale:2.0, sprite:SPRITES.giant, pal:PALETTES.boss_golem,
+        // 生み出す」召喚役に振り直した。前線に置きっぱなしで無限に増援を出し続けられると
+        // 壊れてしまうため、本体はかなり脆くしてある（タンクではなく壊れやすい召喚拠点）
+        name:'ストーン', cost:60, hp:90, dmg:10, range:30, speed:0.26, rate:110,
+        type:'melee', mass:1.0, kb:0, scale:2.0, sprite:SPRITES.giant, pal:PALETTES.boss_golem,
         summonType:'miniStone', summonInterval:240, summonCount:1,
-        comment:'4秒ごとに自分の周りにミニストーンを1体生み出す。自身の性能は控えめだが、戦いが長引くほど頭数で押せる'
+        comment:'4秒ごとに自分の周りにミニストーンを1体生み出す。本体はかなり脆く、前線に置くとすぐ倒れる。後方で守りながら運用したい'
     },
     miniStone: {
         // ストーンが生み出す増援。ショップには並ばず購入不可(cost:0)
@@ -152,7 +152,7 @@ const UNIT_DEFS = {
         // 「値段が高いだけで雑魚も倒せない」との声を受けて強化。
         // 基礎火力・射程を底上げし、ランプ上限も撤廃(狙い続ける限り際限なく伸びる)
         name:'セントリー', cost:90, hp:500, dmg:26, range:230, speed:0.26, rate:60,
-        type:'beam', mass:2.0, kb:0, beamRampRate:0.015, beamRampCap:Infinity, scale:2.3, sprite:SPRITES.giant, pal:PALETTES.boss_construct,
+        type:'beam', mass:2.0, kb:0, beamRampRate:0.015, beamRampCap:Infinity, scale:2.6, sprite:SPRITES.sentry, pal:PALETTES.boss_construct,
         comment:'狙いを外さず照射し続けるほどダメージが増す長射程ビーム。対象を切り替えると威力はリセットされる'
     }
 };
