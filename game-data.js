@@ -74,9 +74,9 @@ const UNIT_DEFS = {
         comment:'味方ユニットのHPを回復する'
     },
     giant: {
-        name:'ゴーレム', cost:90, hp:1200, dmg:58, range:36, speed:0.34, rate:115,
+        name:'ゴーレム', cost:65, hp:1300, dmg:58, range:36, speed:0.34, rate:115,
         type:'tank', mass:5.0, kb:30, sprite:SPRITES.giant, pal:PALETTES.giant,
-        comment:'圧倒的な耐久と引き換えに火力は控えめな純粋な盾役'
+        comment:'圧倒的な耐久と引き換えに火力は控えめな純粋な盾役。HP/コスト効率はナイトより明確に高い'
     },
 
     // --- 敵ユニット（AI 対戦モードでは AI も購入する） ---
@@ -127,6 +127,21 @@ const UNIT_DEFS = {
         name:'インプ', cost:55, hp:130, dmg:34, range:24, speed:0.90, rate:40,
         type:'melee', mass:1.0, kb:8, scale:2.2, sprite:SPRITES.boss_demon.idle, pal:PALETTES.boss_titan,
         comment:'圧倒的な速さで急襲する俊敏な小悪魔。打たれ弱い'
+    },
+    stoneGuardian: {
+        name:'ストーンガーディアン', cost:75, hp:900, dmg:40, range:34, speed:0.30, rate:120,
+        type:'tank', mass:6.0, kb:20, armor:0.7, scale:2.3, sprite:SPRITES.giant, pal:PALETTES.boss_golem,
+        comment:'被ダメージを30%軽減する重装の守護者。ゴーレムよりさらに打たれ強いが火力は控えめ'
+    },
+    graveLord: {
+        name:'グレイブロード', cost:70, hp:380, dmg:42, range:30, speed:0.40, rate:65,
+        type:'melee', mass:1.6, kb:6, lifesteal:0.30, scale:2.3, sprite:SPRITES.boss_skeleton.idle, pal:PALETTES.boss_necro,
+        comment:'近接で殴るたびに与えたダメージの30%を自己回復する死霊騎士'
+    },
+    sentry: {
+        name:'セントリー', cost:90, hp:500, dmg:18, range:170, speed:0.26, rate:60,
+        type:'beam', mass:2.0, kb:0, beamRampRate:0.01, beamRampCap:2.5, scale:2.3, sprite:SPRITES.giant, pal:PALETTES.boss_construct,
+        comment:'狙いを外さず照射し続けるほどダメージが増す長射程ビーム。対象を切り替えると威力はリセットされる'
     }
 };
 
@@ -136,7 +151,7 @@ const SHOP_UNITS = ['knight', 'archer', 'wizard', 'healer', 'giant', 'goblin', '
 
 // SURVIVAL / VERSUS 限定で追加購入できるエリートユニット
 // （ストーリーの世界観を保つため、ストーリーモードには出さない）
-const ELITE_UNITS = ['warlord', 'lich', 'drake', 'imp'];
+const ELITE_UNITS = ['warlord', 'lich', 'drake', 'imp', 'stoneGuardian', 'graveLord', 'sentry'];
 
 // 現在のモードで購入できるユニット一覧を返す
 function shopUnitsFor(mode) {
@@ -274,7 +289,8 @@ const BOSS_DEFS = {
     4: {
         name:'ゴブリン大王', hp:3500, dmg:100, speed:0.18, special:'summon',
         palette:PALETTES.boss_goblin, sprite:SPRITES.boss_orc,
-        summonType:'goblin', summonCount:2, summonInterval:300
+        summonType:'goblin', summonCount:2, summonInterval:300,
+        meleeSplash:110, meleeSplashRate:0.7 // 大振りの薙ぎ払い。密集した壁ユニットを咎める広範囲攻撃
     },
     5: {
         name:'ストーンゴーレム', hp:4800, dmg:140, speed:0.12, special:'armor',
@@ -300,9 +316,12 @@ const BOSS_DEFS = {
         lifesteal:0.3 // 与えたダメージの30%を自己回復する死霊術師らしい個性
     },
     9: {
-        name:'エンシェントコンストラクト', hp:7700, dmg:185, speed:0.10, special:'laser',
+        // dmg は継続照射の基礎DPS(ランプ倍率1倍時)として扱う
+        name:'エンシェントコンストラクト', hp:7700, dmg:70, speed:0.10, special:'beam',
         palette:PALETTES.boss_construct, sprite:SPRITES.giant,
-        laserInterval:280, laserDamage:260
+        // 継続照射: 同じ相手(拠点含む)を狙い続けるほどダメージが増える。
+        // 対象を切り替えられると威力はリセットされるため、粘着させないことが重要になる
+        beam:true, range:200, beamRampRate:0.0056, beamRampCap:3
     },
     10: {
         name:'カオスタイタン', hp:14000, dmg:270, speed:0.13, special:'phases',

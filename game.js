@@ -321,7 +321,7 @@ class Unit {
         this.dmg = this.def.dmg * mult;
         this.rate = this.def.rate * rm;
         this.speed = this.def.speed * sm;
-        this.range = this.def.range * (this.def.type === 'ranged' || this.def.type === 'aoe' || this.def.type === 'healer' ? gm : 1);
+        this.range = this.def.range * (this.def.type === 'ranged' || this.def.type === 'aoe' || this.def.type === 'healer' || this.def.type === 'beam' ? gm : 1);
         this.scale = unitScale(key);
 
         this.cd = Math.random() * 10;
@@ -333,6 +333,7 @@ class Unit {
         this.radius = 7;
         this.target = null;                 // ロックオン中の攻撃対象
         this.slowTimer = 0;                 // スケルトンの鈍足効果の残りフレーム
+        this.beamTime = 0;                  // 継続照射(セントリーなど)の連続照射時間
     }
 
     // 攻撃対象を探す
@@ -415,7 +416,18 @@ class Unit {
             const reach = this.range + (target.radius || 0);
 
             if(d <= reach) {
-                if(this.cd <= 0) {
+                if(this.def.type === 'beam') {
+                    // 継続照射（セントリーなど）: ロックオン中の相手を狙い続けるほど
+                    // ダメージが増える。ロックが外れて対象が変わると威力はリセットされる
+                    if(this.beamTarget !== target) { this.beamTarget = target; this.beamTime = 0; }
+                    this.beamTime += dt;
+                    const rampMult = Math.min(this.def.beamRampCap, 1 + this.def.beamRampRate * this.beamTime);
+                    target.takeDmg(this.dmg * rampMult * dt / 60, this);
+                    state.fx.push({
+                        type:'laser', x1:this.x, y1:this.y - 14, x2:target.x, y2:target.y - 8,
+                        life:14, color: this.isP ? '#60a5fa' : '#f87171'
+                    });
+                } else if(this.cd <= 0) {
                     this.cd = this.rate;
                     this.attack(target);
                 }
@@ -498,6 +510,8 @@ class Unit {
 
     takeDmg(v, attacker) {
         if(this.hp <= 0) return;
+        // 装甲（ストーンガーディアンなど。被ダメージを一定割合軽減する）
+        if(this.def.armor) v *= this.def.armor;
         this.hp -= v;
         this.flash = 6;
         spawnPop(this.x, this.y - 22, Math.floor(v), '#ffffff');
@@ -598,6 +612,8 @@ class Boss {
         this.anim = 0;
         this.specialTimer = 0;
         this.phase = 0;
+        this.beamTarget = null;
+        this.beamTime = 0;
         this.corpses = [];
         this.scale = 3.5;
         this.radius = 22;
@@ -665,7 +681,30 @@ class Boss {
         }
         if(!target || bd > 260) target = state.playerBase;
 
-        if(target) {
+        if(this.data.beam) {
+            // 継続照射（エンシェントコンストラクトなど）: 同じ相手を狙い続けるほど
+            // ダメージが増える。ロックオンはユニットの TARGET_LOCK_RANGE と同じ
+            // 仕組みを流用し、対象を切り替えると威力はリセットされる
+            const locked = this.beamTarget && this.beamTarget.hp > 0 &&
+                           dist(this.beamTarget, this) <= TARGET_LOCK_RANGE;
+            if(!locked) { this.beamTarget = target; this.beamTime = 0; }
+            const bt = this.beamTarget;
+            if(bt) {
+                const bDist = dist(bt, this);
+                const beamRange = this.data.range || 200;
+                if(bDist <= beamRange) {
+                    this.beamTime += dt;
+                    const rampMult = Math.min(this.data.beamRampCap, 1 + this.data.beamRampRate * this.beamTime);
+                    bt.takeDmg(this.dmg * rampMult * dt / 60, this);
+                    state.fx.push({ type:'laser', x1:this.x, y1:this.y - 18, x2:bt.x, y2:bt.y - 10, life:14, color:'#60a5fa' });
+                    if(Math.floor(this.beamTime) % 60 === 0) addShake(2);
+                } else {
+                    const a = Math.atan2(bt.y - this.y, bt.x - this.x);
+                    this.x += Math.cos(a) * this.speed * dt;
+                    this.y += Math.sin(a) * this.speed * dt;
+                }
+            }
+        } else if(target) {
             const d = dist(target, this);
             // シャドウアサシンなど data.range を持つボスは近接ではなく遠距離攻撃
             // （せっかく敵陣にワープしても接触待ちで意味が薄れないように）
@@ -692,6 +731,22 @@ class Boss {
                         // 与えたダメージの一部で自己回復（ネクロロードなど data.lifesteal を持つ場合のみ）
                         if(this.data.lifesteal) {
                             this.hp = Math.min(this.maxHp, this.hp + this.dmg * this.data.lifesteal);
+                        }
+                        // 薙ぎ払い（ゴブリン大王など data.meleeSplash を持つ場合のみ。
+                        // オークの近接範囲攻撃と同じ仕組みをボス用に大きな半径で流用）
+                        if(this.data.meleeSplash) {
+                            const splashDmg = this.dmg * (this.data.meleeSplashRate || 0.6);
+                            state.units.forEach(u => {
+                                if(u === target || !u.isP || u.hp <= 0) return;
+                                if(dist(u, target) <= this.data.meleeSplash) u.takeDmg(splashDmg, this);
+                            });
+                            for(let i = 0; i < 10; i++) {
+                                const a2 = (Math.PI * 2 / 10) * i;
+                                state.fx.push({
+                                    x: target.x + Math.cos(a2) * 14, y: target.y + Math.sin(a2) * 14,
+                                    vx: Math.cos(a2) * 2.5, vy: Math.sin(a2) * 2.5, life: 18, color: '#f97316'
+                                });
+                            }
                         }
                     }
                 }
@@ -766,18 +821,6 @@ class Boss {
                 }
                 break;
 
-            case 'laser':
-                if(this.specialTimer > d.laserInterval) {
-                    this.specialTimer = 0;
-                    const b = state.playerBase;
-                    state.units.filter(u => u.isP && Math.abs(u.x - b.x) < 34)
-                        .forEach(u => u.takeDmg(d.laserDamage, this));
-                    b.takeDmg(d.laserDamage, this);
-                    state.fx.push({ type:'laser', x1:this.x, y1:this.y - 18, x2:b.x, y2:b.y, life:22, color:'#60a5fa' });
-                    spawnPop(this.x, this.y - 60, 'LASER!', '#60a5fa');
-                    addShake(10);
-                }
-                break;
         }
     }
 
@@ -1839,7 +1882,7 @@ function buildUnitCard(key, opts) {
         <div class="card-stats">
             <span><b>体力</b>${dispHp}</span>
             <span><b>攻撃力</b>${dispDmg < 0 ? '回復' + Math.abs(dispDmg) : dispDmg}</span>
-            <span><b>攻撃間隔</b>${(def.rate / 60).toFixed(2)}秒</span>
+            <span><b>攻撃間隔</b>${def.type === 'beam' ? '常時照射' : (def.rate / 60).toFixed(2) + '秒'}</span>
             <span><b>移動速度</b>${Math.round(def.speed * 100)}</span>
             <span><b>射程</b>${def.range}</span>
             <span><b>範囲攻撃</b>${splash ? '半径' + splash : 'なし'}</span>
