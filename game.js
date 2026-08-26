@@ -53,6 +53,8 @@ const state = {
     paused: false,            // バトルの一時停止
     timeWarp: 0,              // タイムワープ残り（フレーム）
     shake: 0,
+    hitstop: 0,               // 演出用の一時停止残り（フレーム。ボスのフェーズ移行など）
+    bossClearDelay: 0,        // ボス撃破後、結果画面に切り替わるまでの余韻（フレーム）
     kills: 0,
     snapshot: null,           // ラウンド開始時の状態（やり直し用）
     result: null,             // 直前のバトル結果
@@ -113,12 +115,12 @@ function toast(msg) {
 // 強化（アップグレード）の効果計算
 // ============================================================
 const upCount     = k => state.upgrades[k] || 0;
-const rateMult    = () => Math.max(RATE_MULT_MIN, Math.pow(0.90, upCount('atk_speed')));
-const moveMult    = () => Math.min(MOVE_MULT_CAP, Math.pow(1.16, upCount('speed_boost')));
-const rangeMult   = () => Math.min(RANGE_MULT_CAP, Math.pow(1.14, upCount('range_ext')));
+const rateMult    = () => Math.max(RATE_MULT_MIN, 1 - 0.10 * upCount('atk_speed'));
+const moveMult    = () => Math.min(MOVE_MULT_CAP, 1 + 0.10 * upCount('speed_boost'));
+const rangeMult   = () => Math.min(RANGE_MULT_CAP, 1 + 0.10 * upCount('range_ext'));
 const baseBonusHp = () => 250 * upCount('fortified');
 const baseRegen   = () => 5 * upCount('regen');
-const thornsRate  = () => Math.min(0.75, 0.20 * upCount('thorns'));
+const thornsRate  = () => Math.min(0.75, 0.15 * upCount('thorns'));
 const vampireRate = () => Math.min(0.5, 0.10 * upCount('vampire'));
 
 // 強化タブのうち上限がある5項目について、現在値・上限・到達済みかを
@@ -634,7 +636,23 @@ class Boss {
                 this.speed = this.data.speed * this.data.phases[targetPhase].speedMult;
                 this.dmg = this.data.dmg * this.data.phases[targetPhase].damageMult;
                 spawnPop(this.x, this.y - 60, `PHASE ${targetPhase + 1}!`, '#ef4444');
-                addShake(8);
+                addShake(16);
+
+                // 一瞬時が止まったような間を置いてから、周囲の味方を全員吹き飛ばす
+                // （フェーズ移行の节目を「見て分かる」演出にするための専用効果。
+                // 通常のノックバック上限(KNOCKBACK_CAP)はここでは適用しない）
+                state.hitstop = 18;
+                state.units.forEach(u => {
+                    if(!u.isP || u.vx === undefined) return;
+                    const a = Math.atan2(u.y - this.y, u.x - this.x) || Math.random() * Math.PI * 2;
+                    const k = KNOCKBACK_CAP * 3;
+                    u.vx += Math.cos(a) * k;
+                    u.vy += Math.sin(a) * k;
+                });
+                for(let i = 0; i < 24; i++) {
+                    const a = (Math.PI * 2 / 24) * i;
+                    state.fx.push({ x:this.x, y:this.y - 20, vx:Math.cos(a) * 4, vy:Math.sin(a) * 4, life:26, color:'#ef4444' });
+                }
             }
         }
 
@@ -649,12 +667,33 @@ class Boss {
 
         if(target) {
             const d = dist(target, this);
-            const reach = 42 + (target.radius || 0);
-            if(d <= reach) {
+            // シャドウアサシンなど data.range を持つボスは近接ではなく遠距離攻撃
+            // （せっかく敵陣にワープしても接触待ちで意味が薄れないように）
+            const atkRange = this.data.range || (42 + (target.radius || 0));
+            if(d <= atkRange) {
                 if(this.cd <= 0) {
                     this.cd = 60;
-                    target.takeDmg(this.dmg, this);
-                    addShake(5);
+                    if(this.data.range) {
+                        state.projs.push({
+                            x: this.x, y: this.y - 20,
+                            target, dmg: this.dmg, def: { type:'ranged' },
+                            isP: false, owner: this, active: true
+                        });
+                    } else {
+                        target.takeDmg(this.dmg, this);
+                        addShake(5);
+                        // ノックバック（重量級ボスの個性。ストーンゴーレムなど data.knockback を持つ場合のみ）
+                        if(this.data.knockback && target.vx !== undefined) {
+                            const a2 = Math.atan2(target.y - this.y, target.x - this.x);
+                            const k = Math.min(KNOCKBACK_CAP, this.data.knockback);
+                            target.vx += Math.cos(a2) * k;
+                            target.vy += Math.sin(a2) * k;
+                        }
+                        // 与えたダメージの一部で自己回復（ネクロロードなど data.lifesteal を持つ場合のみ）
+                        if(this.data.lifesteal) {
+                            this.hp = Math.min(this.maxHp, this.hp + this.dmg * this.data.lifesteal);
+                        }
+                    }
                 }
             } else {
                 const a = Math.atan2(target.y - this.y, target.x - this.x);
@@ -760,12 +799,18 @@ class Boss {
         if(this.hp <= 0) {
             this.hp = 0;
             state.kills++;
-            for(let i = 0; i < 24; i++) {
-                state.fx.push({ x:this.x, y:this.y - 24, vx:randRange(-4,4), vy:randRange(-5,1), life:40, color:'#fbbf24' });
+            const colors = ['#fbbf24', '#f472b6', '#60a5fa', '#34d399'];
+            for(let i = 0; i < 36; i++) {
+                state.fx.push({ x:this.x, y:this.y - 24, vx:randRange(-5,5), vy:randRange(-6,1), life:50, color:colors[i % colors.length] });
             }
             addShake(14);
+            spawnPop(this.x, this.y - 90, 'ボス撃破！', '#fbbf24');
             state.boss = null;
             state.bossCleared = true;
+            // 結果画面へ切り替わる前に、撃破の余韻を少し見せる
+            // （hitstopで一瞬止めてから、紙吹雪が舞う間だけ結果画面をディレイする）
+            state.hitstop = 20;
+            state.bossClearDelay = 70;
         }
     }
 
@@ -1132,6 +1177,8 @@ function enterPrep() {
     state.fx = [];
     state.popups = [];
     state.timeWarp = 0;
+    state.hitstop = 0;
+    state.bossClearDelay = 0;
     state.kills = 0;
     state.speed = 1;
 
@@ -1552,6 +1599,8 @@ function retryRound() {
     state.boss = null;
     state.bossCleared = false;
     state.timeWarp = 0;
+    state.hitstop = 0;
+    state.bossClearDelay = 0;
     state.kills = 0;
     state.playerBase = new Base(true);
     state.enemyBase = isVsMode() ? new Base(false) : null;
@@ -1613,6 +1662,9 @@ function backToTitle() {
     state.fx = [];
     state.popups = [];
     state.boss = null;
+    state.hitstop = 0;
+    state.bossClearDelay = 0;
+    state.shopTab = 'units';
     closePauseModal();
     closeShop();
     closeCodex();
@@ -1683,6 +1735,8 @@ function loadGame() {
         state.popups = [];
         state.boss = null;
         state.bossCleared = false;
+        state.hitstop = 0;
+        state.bossClearDelay = 0;
         state.playerBase = new Base(true);
         state.enemyBase = isVsMode() ? new Base(false) : null;
         clampRosters();
@@ -2483,7 +2537,12 @@ function checkBattleEnd() {
     const foesAlive = state.units.some(u => !u.isP) || !!state.boss;
 
     if(state.mode === 'story') {
-        if(state.bossCleared) { endBattle(true); return; }
+        if(state.bossCleared) {
+            // 撃破直後の余韻演出(紙吹雪など)が終わるまで結果画面への切り替えを少し待つ
+            if(state.bossClearDelay > 0) { state.bossClearDelay--; return; }
+            endBattle(true);
+            return;
+        }
 
         // 味方が全滅し、召喚の見込みもない場合は勝ち目が無いので即敗北にする
         // （拠点だけが残って延々と削られるのを待たせない）
@@ -2933,9 +2992,15 @@ let hudTick = 0;
 
 function loop() {
     if(state.scene === 'battle' && !state.paused) {
-        for(let i = 0; i < state.speed; i++) {
-            if(state.scene !== 'battle') break;
-            updateBattle(1);
+        if(state.hitstop > 0) {
+            // 演出用の一時停止中はロジックを進めず、シェイクや粒子だけ動かす
+            state.hitstop--;
+            updateFx(1);
+        } else {
+            for(let i = 0; i < state.speed; i++) {
+                if(state.scene !== 'battle') break;
+                updateBattle(1);
+            }
         }
         if(++hudTick % 6 === 0) { updateHud(); updateBattlePanel(); }
     } else {
