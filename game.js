@@ -88,6 +88,11 @@ const KNOCKBACK_CAP = 4;
 // 現れても目移りせず狙い続ける（タンクやノックバックで足止めする意味を保つため）
 const TARGET_LOCK_RANGE = 210;
 
+// 継続照射(セントリーなど)のダメージ表示間隔（フレーム）。
+// 毎フレーム細かくtakeDmgすると「0」ばかりのポップアップが大量に出て
+// HPバーが見えなくなるため、この間隔でまとめて反映・表示する
+const BEAM_TICK_INTERVAL = 15;
+
 // ダメージ表示などのポップアップ
 function spawnPop(x, y, text, color) {
     state.popups.push({ x, y, text, color, life: 1.0, rise: 0 });
@@ -334,6 +339,8 @@ class Unit {
         this.target = null;                 // ロックオン中の攻撃対象
         this.slowTimer = 0;                 // スケルトンの鈍足効果の残りフレーム
         this.beamTime = 0;                  // 継続照射(セントリーなど)の連続照射時間
+        this.beamDmgAccum = 0;              // 継続照射のダメージ表示をまとめるための積算
+        this.beamTickTimer = 0;
         this.summonTimer = 0;               // 定期召喚(ストーンなど)の経過フレーム
     }
 
@@ -436,13 +443,26 @@ class Unit {
                 if(this.def.type === 'beam') {
                     // 継続照射（セントリーなど）: ロックオン中の相手を狙い続けるほど
                     // ダメージが増える。ロックが外れて対象が変わると威力はリセットされる
-                    if(this.beamTarget !== target) { this.beamTarget = target; this.beamTime = 0; }
+                    if(this.beamTarget !== target) {
+                        // 対象切り替え時、まだ表示していない蓄積ダメージを反映してから切り替える
+                        if(this.beamDmgAccum > 0 && this.beamTarget && this.beamTarget.hp > 0) {
+                            this.beamTarget.takeDmg(this.beamDmgAccum, this);
+                        }
+                        this.beamTarget = target; this.beamTime = 0;
+                        this.beamDmgAccum = 0; this.beamTickTimer = 0;
+                    }
                     this.beamTime += dt;
                     const rampMult = Math.min(this.def.beamRampCap, 1 + this.def.beamRampRate * this.beamTime);
-                    target.takeDmg(this.dmg * rampMult * dt / 60, this);
+                    this.beamDmgAccum += this.dmg * rampMult * dt / 60;
+                    this.beamTickTimer += dt;
+                    if(this.beamTickTimer >= BEAM_TICK_INTERVAL) {
+                        this.beamTickTimer = 0;
+                        target.takeDmg(this.beamDmgAccum, this);
+                        this.beamDmgAccum = 0;
+                    }
                     state.fx.push({
                         type:'laser', x1:this.x, y1:this.y - 14, x2:target.x, y2:target.y - 8,
-                        life:14, color: this.isP ? '#60a5fa' : '#f87171'
+                        life:14, width:2.5, color: this.isP ? '#60a5fa' : '#f87171'
                     });
                 } else if(this.cd <= 0) {
                     this.cd = this.rate;
@@ -631,6 +651,8 @@ class Boss {
         this.phase = 0;
         this.beamTarget = null;
         this.beamTime = 0;
+        this.beamDmgAccum = 0;
+        this.beamTickTimer = 0;
         this.corpses = [];
         this.scale = 3.5;
         this.radius = 22;
@@ -704,7 +726,13 @@ class Boss {
             // 仕組みを流用し、対象を切り替えると威力はリセットされる
             const locked = this.beamTarget && this.beamTarget.hp > 0 &&
                            dist(this.beamTarget, this) <= TARGET_LOCK_RANGE;
-            if(!locked) { this.beamTarget = target; this.beamTime = 0; }
+            if(!locked) {
+                if(this.beamDmgAccum > 0 && this.beamTarget && this.beamTarget.hp > 0) {
+                    this.beamTarget.takeDmg(this.beamDmgAccum, this);
+                }
+                this.beamTarget = target; this.beamTime = 0;
+                this.beamDmgAccum = 0; this.beamTickTimer = 0;
+            }
             const bt = this.beamTarget;
             if(bt) {
                 const bDist = dist(bt, this);
@@ -712,8 +740,14 @@ class Boss {
                 if(bDist <= beamRange) {
                     this.beamTime += dt;
                     const rampMult = Math.min(this.data.beamRampCap, 1 + this.data.beamRampRate * this.beamTime);
-                    bt.takeDmg(this.dmg * rampMult * dt / 60, this);
-                    state.fx.push({ type:'laser', x1:this.x, y1:this.y - 18, x2:bt.x, y2:bt.y - 10, life:14, color:'#60a5fa' });
+                    this.beamDmgAccum += this.dmg * rampMult * dt / 60;
+                    this.beamTickTimer += dt;
+                    if(this.beamTickTimer >= BEAM_TICK_INTERVAL) {
+                        this.beamTickTimer = 0;
+                        bt.takeDmg(this.beamDmgAccum, this);
+                        this.beamDmgAccum = 0;
+                    }
+                    state.fx.push({ type:'laser', x1:this.x, y1:this.y - 18, x2:bt.x, y2:bt.y - 10, life:14, width:2.5, color:'#60a5fa' });
                     if(Math.floor(this.beamTime) % 60 === 0) addShake(2);
                 } else {
                     const a = Math.atan2(bt.y - this.y, bt.x - this.x);
@@ -1987,8 +2021,9 @@ function renderShop() {
             card.className = 'shop-card';
             card.dataset.upgrade = key;
             // 上限がある項目は「現在○%（上限○%）」を表示し、上限に達したら
-            // ユニット個別レベルと同じ「★ 最大まで強化済み」表示にして
-            // それ以上ゴールドを消費して買えないようにする
+            // ユニット個別レベルと同じ「★ 最大まで強化済み」表示にする。
+            // ボタン部分(.card-lvup)は maxed になっても常に同じ構造で描画し、
+            // 高さが変わって連打中にボタン位置がズレる(押しミスの原因)ことを防ぐ
             const progressLine = status
                 ? `<div class="card-comment" style="margin-top:2px">現在 ${status.pct}%（上限 ${status.cap}%）</div>` : '';
             card.innerHTML = `
@@ -1996,14 +2031,20 @@ function renderShop() {
                     <div class="card-emoji">${def.icon}</div>
                     <div class="card-id">
                         <div class="card-name">${def.name}</div>
-                        <div class="card-sub">${owned ? `<span class="card-own">Lv.${owned}</span>` : '<span class="card-type">永続</span>'}</div>
+                        <div class="card-sub"><span class="card-own">Lv.${owned}</span></div>
                     </div>
-                    ${maxed ? '' : `<div class="card-cost">${price}G</div>`}
                 </div>
                 <div class="card-comment" style="margin-top:4px">${def.desc}</div>
                 ${progressLine}
-                ${maxed ? `<div class="card-lvup"><span class="lvup-maxed">★ 最大まで強化済み</span></div>` : ''}`;
-            if(!maxed) card.addEventListener('click', () => buyUpgrade(key));
+                <div class="card-lvup">${maxed
+                    ? `<span class="lvup-maxed">★ 最大まで強化済み</span>`
+                    : `<button class="lvup-btn" type="button">▲ 強化する</button><span class="lvup-cost">${price}G</span>`}</div>`;
+            if(!maxed) {
+                card.querySelector('.lvup-btn').addEventListener('click', e => {
+                    e.stopPropagation();
+                    buyUpgrade(key);
+                });
+            }
             list.appendChild(card);
         });
 
@@ -2812,7 +2853,7 @@ function draw() {
         if(f.type === 'laser') {
             ctx.strokeStyle = f.color;
             ctx.globalAlpha = clamp(f.life / 22, 0, 1);
-            ctx.lineWidth = 10;
+            ctx.lineWidth = f.width || 10;
             ctx.beginPath();
             ctx.moveTo(f.x1, f.y1);
             ctx.lineTo(f.x2, f.y2);

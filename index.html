@@ -391,9 +391,10 @@ body {
     box-shadow: 0 0 0 1px rgba(245,158,11,0.35);
 }
 /* cant-buy はユニット本体が購入できないことを示す。強化(レベルアップ)は
-   それとは独立して有効な場合があるため、.card-lvup を持つカードでは
-   購入部分(.card-buyable)だけを薄くし、強化欄は薄くしない */
-.shop-card.cant-buy:not(:has(.card-lvup)) { opacity: 0.42; }
+   それとは独立して有効な場合があるため、.card-buyable(購入部分)を持つ
+   ユニットカードでは購入部分だけを薄くし、強化欄は薄くしない。
+   強化・戦術カードには .card-buyable が無いためカード全体が薄くなる */
+.shop-card.cant-buy:not(:has(.card-buyable)) { opacity: 0.42; }
 .shop-card.cant-buy .card-buyable { opacity: 0.42; }
 .shop-card.owned-tactic { border-color: rgba(167,139,250,0.5); }
 
@@ -479,6 +480,7 @@ body {
     font-weight: 800;
     color: var(--gold);
     padding: 5px 0;
+    border: 1px solid transparent; /* .lvup-btn と同じ box-model にして高さのズレを防ぐ */
 }
 .card-note { font-size: 9px; color: var(--purple); line-height: 1.35; margin-top: 2px; }
 
