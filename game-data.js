@@ -129,12 +129,14 @@ const UNIT_DEFS = {
         comment:'圧倒的な速さで急襲する俊敏な小悪魔。打たれ弱い'
     },
     stoneGuardian: {
-        name:'ストーンガーディアン', cost:75, hp:900, dmg:40, range:34, speed:0.30, rate:120,
-        type:'tank', mass:6.0, kb:20, armor:0.7, scale:2.3, sprite:SPRITES.giant, pal:PALETTES.boss_golem,
-        comment:'被ダメージを30%軽減する重装の守護者。ゴーレムよりさらに打たれ強いが火力は控えめ'
+        // ゴーレムとの役割被りを避けるため、火力をほぼ捨てた純粋な壁に振り直した
+        // （ゴーレム=そこそこ殴れる万能タンク／ストーン=ほぼ攻撃しない代わりに圧倒的に硬い壁）
+        name:'ストーン', cost:60, hp:700, dmg:15, range:32, speed:0.26, rate:140,
+        type:'tank', mass:6.0, kb:10, armor:0.55, scale:2.3, sprite:SPRITES.giant, pal:PALETTES.boss_golem,
+        comment:'被ダメージを45%軽減する純粋な壁役。攻撃力はほぼ無いに等しいが圧倒的に硬く、後衛を守り抜く'
     },
     graveLord: {
-        name:'グレイブロード', cost:70, hp:380, dmg:42, range:30, speed:0.40, rate:65,
+        name:'ロード', cost:70, hp:380, dmg:42, range:30, speed:0.40, rate:65,
         type:'melee', mass:1.6, kb:6, lifesteal:0.30, scale:2.3, sprite:SPRITES.boss_skeleton.idle, pal:PALETTES.boss_necro,
         comment:'近接で殴るたびに与えたダメージの30%を自己回復する死霊騎士'
     },
@@ -149,13 +151,12 @@ const UNIT_DEFS = {
 // ボス以外はプレイヤー・AI ともに全種類を購入できる
 const SHOP_UNITS = ['knight', 'archer', 'wizard', 'healer', 'giant', 'goblin', 'orc', 'skeleton'];
 
-// SURVIVAL / VERSUS 限定で追加購入できるエリートユニット
-// （ストーリーの世界観を保つため、ストーリーモードには出さない）
+// エリートユニット（元は SURVIVAL / VERSUS 限定だったが、STORY含む全モードで購入可能）
 const ELITE_UNITS = ['warlord', 'lich', 'drake', 'imp', 'stoneGuardian', 'graveLord', 'sentry'];
 
-// 現在のモードで購入できるユニット一覧を返す
+// 現在のモードで購入できるユニット一覧を返す（全モード共通ラインナップ）
 function shopUnitsFor(mode) {
-    return (mode === 'story') ? SHOP_UNITS : SHOP_UNITS.concat(ELITE_UNITS);
+    return SHOP_UNITS.concat(ELITE_UNITS);
 }
 
 // 同時に配置できるユニット数の上限（モード別）
