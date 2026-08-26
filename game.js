@@ -334,6 +334,7 @@ class Unit {
         this.target = null;                 // ロックオン中の攻撃対象
         this.slowTimer = 0;                 // スケルトンの鈍足効果の残りフレーム
         this.beamTime = 0;                  // 継続照射(セントリーなど)の連続照射時間
+        this.summonTimer = 0;               // 定期召喚(ストーンなど)の経過フレーム
     }
 
     // 攻撃対象を探す
@@ -380,6 +381,22 @@ class Unit {
         if(this.flash > 0) this.flash--;
         if(this.cd > 0) this.cd -= dt;
         this.anim += dt * 0.15;
+
+        // 定期召喚（ストーンなど）。戦闘状況によらず、生きている限り一定間隔で発動する
+        if(this.def.summonType) {
+            this.summonTimer += dt;
+            if(this.summonTimer > this.def.summonInterval) {
+                this.summonTimer = 0;
+                const n = this.def.summonCount || 1;
+                for(let i = 0; i < n; i++) {
+                    const a = (Math.PI * 2 / n) * i;
+                    state.units.push(new Unit(this.def.summonType, this.isP,
+                        clamp(this.x + Math.cos(a) * 30, 20, state.w - 20),
+                        clamp(this.y + Math.sin(a) * 30 + 16, 24, state.h - 14)));
+                }
+                spawnPop(this.x, this.y - 40, '+' + n, '#a3e635');
+            }
+        }
 
         // ノックバックの慣性
         this.x += this.vx * dt;
@@ -2100,9 +2117,9 @@ function openCodex() {
     list.innerHTML = '';
 
     const groups = [
-        { label: '基本ユニット（全モード）', keys: SHOP_UNITS },
-        { label: 'エリートユニット（SURVIVAL / VERSUS 限定）', keys: ELITE_UNITS },
-        { label: '戦術で召喚', keys: ['angel'] }
+        { label: '基本ユニット', keys: SHOP_UNITS },
+        { label: 'エリートユニット', keys: ELITE_UNITS },
+        { label: '戦術・ユニットが召喚', keys: ['angel', 'miniStone'] }
     ];
     groups.forEach(g => {
         const head = document.createElement('div');
