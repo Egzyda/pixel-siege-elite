@@ -806,19 +806,20 @@ body {
 .info-side.mine { color: var(--green); }
 .info-side.foe { color: var(--red); }
 
-/* 図鑑は1列でゆったり表示する */
+/* 図鑑もショップと同じ2カラムグリッドで表示する */
 #codex-list {
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     gap: 7px;
     padding: 2px 2px 8px;
 }
 .codex-group {
+    grid-column: 1 / -1;
     font-size: 9px;
     letter-spacing: 1.5px;
     color: var(--muted);
