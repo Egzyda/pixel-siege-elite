@@ -41,6 +41,7 @@ const state = {
     tactics: {},              // 購入済みの戦術 {key: true}
     tacticTimers: {},         // 戦術のクールダウン残り（フレーム）
 
+    selectedMode: 'story',    // モード選択画面で選択中のモード（STARTボタンで決定）
     shopTab: 'units',         // ショップの表示タブ
     selected: null,           // 選択中のショップユニット
     drag: null,               // ドラッグ中の配置ユニット
@@ -142,9 +143,14 @@ function upgradeStatus(key) {
     }
 }
 
+// 召喚ユニットが購入元ユニットのレベルをそのまま引き継ぐためのエイリアス
+// （ミニストーンはショップに並ばず個別レベルを持たないため、ストーンの
+// レベルをそのまま参照する）
+const SUMMON_LEVEL_ALIAS = { miniStone: 'stoneGuardian' };
+
 // ユニット個別レベル（キーごとの購入回数）
 // 複利のまま無制限だと1種に注ぎ込み続けた際に際限なく強くなるため上限を設ける
-const unitLevel     = k => (state.unitLevels && state.unitLevels[k]) || 0;
+const unitLevel     = k => (state.unitLevels && state.unitLevels[SUMMON_LEVEL_ALIAS[k] || k]) || 0;
 const unitLevelMult = k => Math.min(UNIT_LEVEL_MULT_CAP, Math.pow(1 + UNIT_LEVEL_STAT_GAIN, unitLevel(k)));
 
 // このユニット種のレベルアップが意味を持つ上限。攻撃力・HPの育成は
@@ -152,7 +158,7 @@ const unitLevelMult = k => Math.min(UNIT_LEVEL_MULT_CAP, Math.pow(1 + UNIT_LEVEL
 const effectiveUnitLevelCap = key => UNIT_LEVEL_MULT_CAP;
 
 // AI（VERSUS限定）が投資したユニット個別レベル。計算式はプレイヤーと共通
-const aiUnitLevel     = k => (state.aiUnitLevels && state.aiUnitLevels[k]) || 0;
+const aiUnitLevel     = k => (state.aiUnitLevels && state.aiUnitLevels[SUMMON_LEVEL_ALIAS[k] || k]) || 0;
 const aiUnitLevelMult = k => Math.min(UNIT_LEVEL_MULT_CAP, Math.pow(1 + UNIT_LEVEL_STAT_GAIN, aiUnitLevel(k)));
 // AIの実際の購入価格。プレイヤー側のunitBuyCost()と同じ考え方で、
 // レベルアップ済みの種類は新規購入も割高になる
@@ -237,7 +243,6 @@ class Base {
         this.flash = 8;
         this.shake = 6;
         addShake(4);
-        spawnPop(this.x + randRange(-14, 14), this.y - 10, Math.floor(v), '#ef4444');
 
         // 反射装甲（自拠点のみ）
         if(this.isP && attacker && thornsRate() > 0 && attacker.takeDmg) {
@@ -431,7 +436,14 @@ class Unit {
         const locked = this.target && this.target.hp > 0 && !this.target.isBase &&
                        dist(this.target, this) <= TARGET_LOCK_RANGE;
         if(this.def.type === 'healer' || !locked) {
-            this.target = this.findTarget();
+            // ビーム系(セントリーなど)は、せっかく育てたランプをボスの召喚した
+            // 雑魚に奪われないよう、射程内にボスがいれば雑魚より優先して狙う
+            if(this.def.type === 'beam' && this.isP && state.boss && state.boss.hp > 0 &&
+               dist(state.boss, this) <= this.range) {
+                this.target = state.boss;
+            } else {
+                this.target = this.findTarget();
+            }
         }
         const target = this.target;
 
@@ -551,7 +563,6 @@ class Unit {
         if(this.def.armor) v *= this.def.armor;
         this.hp -= v;
         this.flash = 6;
-        spawnPop(this.x, this.y - 22, Math.floor(v), '#ffffff');
 
         // 吸血（プレイヤー側の攻撃のみ）
         if(attacker && attacker.isP && !attacker.isBase && vampireRate() > 0 && attacker.hp !== undefined) {
@@ -879,11 +890,9 @@ class Boss {
         if(this.hp <= 0) return;
         if(this.special === 'armor') {
             v *= this.data.armorReduction;
-            if(Math.random() < 0.25) spawnPop(this.x, this.y - 50, 'ARMOR!', '#d4d4d8');
         }
         this.hp -= v;
         this.flash = 6;
-        spawnPop(this.x + randRange(-10, 10), this.y - 46, Math.floor(v), '#ffffff');
 
         if(attacker && attacker.isP && !attacker.isBase && vampireRate() > 0 && attacker.hp !== undefined) {
             attacker.hp = Math.min(attacker.max, attacker.hp + v * vampireRate());
@@ -1587,6 +1596,24 @@ function saveRecords() {
     try { localStorage.setItem(RECORDS_KEY, JSON.stringify(state.records)); } catch(e) { /* 無視 */ }
 }
 
+// プレイ記録の消去。誤タップで即消えると事故になるため、
+// 1回目のタップでは確認トーストを出すだけにし、一定時間内の2回目のタップで実行する
+// （alert/confirm は使用禁止のため、トースト経由の2段階確認にしている）
+let clearRecordsArmed = false;
+function onClearRecordsClick() {
+    if(!clearRecordsArmed) {
+        clearRecordsArmed = true;
+        toast('もう一度押すとプレイ記録を消去します');
+        setTimeout(() => { clearRecordsArmed = false; }, 3000);
+        return;
+    }
+    clearRecordsArmed = false;
+    state.records = defaultRecords();
+    saveRecords();
+    renderRecords();
+    toast('プレイ記録を消去しました');
+}
+
 // バトル結果を記録に反映する
 function updateRecords() {
     const rec = state.records;
@@ -1615,18 +1642,30 @@ function renderRecords() {
     const rec = state.records || defaultRecords();
     const panel = document.getElementById('records-panel');
 
-    const survBest = Math.max(rec.survival.easy || 0, rec.survival.normal || 0, rec.survival.hard || 0);
+    // SURVIVALは最高到達ラウンドがどの難易度でのものかも分かるようにする
+    const DIFF_LABEL = { easy: 'EASY', normal: 'NORMAL', hard: 'HARD' };
+    let survBest = 0, survBestDiff = null;
+    ['hard', 'normal', 'easy'].forEach(d => {
+        const v = rec.survival[d] || 0;
+        if(v > survBest) { survBest = v; survBestDiff = d; }
+    });
+
+    // VERSUSは勝敗数をまとめて出す(勝った数だけでは戦績が分からないため)
     const vsWin = ['easy', 'normal', 'hard'].reduce((n, d) => n + (rec.versus[d].win || 0), 0);
+    const vsLose = ['easy', 'normal', 'hard'].reduce((n, d) => n + (rec.versus[d].lose || 0), 0);
 
     const storyText = rec.story.cleared
         ? `<span class="crown">★ 全クリア${rec.story.clearCount > 1 ? ' ×' + rec.story.clearCount : ''}</span>`
         : (rec.story.bestWave > 0 ? `STAGE ${rec.story.bestWave} 到達` : '未プレイ');
+    const survText = survBest > 0
+        ? `ROUND ${survBest} <small>(${DIFF_LABEL[survBestDiff]})</small>` : '未プレイ';
+    const vsText = (vsWin + vsLose) > 0 ? `${vsWin}勝${vsLose}敗` : '未プレイ';
 
     panel.innerHTML = `
         <div class="records-title">PLAY RECORD</div>
         <div class="rec-row"><span>STORY</span><span>${storyText}</span></div>
-        <div class="rec-row"><span>SURVIVAL 最高</span><span>${survBest > 0 ? 'ROUND ' + survBest : '未プレイ'}</span></div>
-        <div class="rec-row"><span>VERSUS 戦績</span><span>${vsWin > 0 ? vsWin + '勝' : '未プレイ'}</span></div>`;
+        <div class="rec-row"><span>SURVIVAL 最高</span><span>${survText}</span></div>
+        <div class="rec-row"><span>VERSUS 戦績</span><span>${vsText}</span></div>`;
 
     // モード選択のバッジ
     const bs = document.getElementById('badge-story');
@@ -1861,20 +1900,18 @@ function loadGame() {
 // ============================================================
 // ユニットのアイコン。enemy を指定すると敵側の赤系パレットで描く
 // （フィールド上の見た目と説明カードの色を一致させるため）
-function unitIconCanvas(key, enemy) {
-    const def = UNIT_DEFS[key];
-    const pal = enemy ? (ENEMY_PALETTES[key] || def.pal) : def.pal;
+function spriteIconCanvas(sprite, pal) {
     const c = document.createElement('canvas');
     c.className = 'card-icon';
     c.width = 40; c.height = 40;
     const g = c.getContext('2d');
-    const box = getSpriteBox(def.sprite);
+    const box = getSpriteBox(sprite);
     const s = Math.floor(Math.min(40 / box.w, 40 / box.h));
     const ox = (40 - box.w * s) / 2 - box.minC * s;
     const oy = (40 - box.h * s) / 2 - box.minR * s;
     for(let r = box.minR; r <= box.maxR; r++) {
         for(let col = box.minC; col <= box.maxC; col++) {
-            const idx = def.sprite[r][col];
+            const idx = sprite[r][col];
             if(idx > 0) {
                 g.fillStyle = pal[idx];
                 g.fillRect(ox + col * s, oy + r * s, s, s);
@@ -1882,6 +1919,12 @@ function unitIconCanvas(key, enemy) {
         }
     }
     return c;
+}
+
+function unitIconCanvas(key, enemy) {
+    const def = UNIT_DEFS[key];
+    const pal = enemy ? (ENEMY_PALETTES[key] || def.pal) : def.pal;
+    return spriteIconCanvas(def.sprite, pal);
 }
 
 // ------------------------------------------------------------
@@ -1970,6 +2013,65 @@ function buildUnitCard(key, opts) {
     return card;
 }
 
+// ボスの特殊能力を、実際のデータ(BOSS_DEFS)から組み立てて説明文にする。
+// special の種類ごとに書き分けつつ、knockback/lifesteal/meleeSplashのような
+// 特殊に依らず持ちうる個性も併記する（ステージ4は summon と meleeSplash を両方持つ、等）
+function bossAbilityDesc(d) {
+    const parts = [];
+    if(d.special === 'summon') parts.push('定期的に手下を呼び出す');
+    if(d.special === 'armor') parts.push('被ダメージを軽減する重装備');
+    if(d.special === 'teleport') parts.push('ワープで位置を変えつつ遠距離攻撃');
+    if(d.special === 'fire') parts.push('周囲に炎の範囲攻撃');
+    if(d.special === 'revive') parts.push('倒れた味方を蘇生する');
+    if(d.special === 'beam') parts.push('狙い続けた相手ほどダメージが増す継続照射');
+    if(d.special === 'phases') parts.push('HPが減ると形態が変化し強化される');
+    if(d.knockback) parts.push('攻撃にノックバック');
+    if(d.lifesteal) parts.push(`与ダメージの${Math.round(d.lifesteal * 100)}%を自己回復`);
+    if(d.meleeSplash) parts.push('広範囲の薙ぎ払い');
+    return parts.length ? parts.join('・') : '特殊能力なし';
+}
+
+// フィールドのボスをタップした際の説明カード（通常ユニットとはデータ形が
+// 異なる=BOSS_DEFS のため、buildUnitCard とは別に組み立てる）。
+// バトル中は実際に稼働中の Boss インスタンス（現在HPを反映）、
+// 準備フェーズのプレビューでは BOSS_DEFS の素の値を渡す
+function buildBossCard() {
+    const boss = state.boss;
+    const d = boss ? boss.data : BOSS_DEFS[state.round];
+    const hp = boss ? Math.max(0, Math.round(boss.hp)) : d.hp;
+    const maxHp = boss ? boss.maxHp : d.hp;
+    const dmg = boss ? boss.dmg : d.dmg;
+    const sprite = boss ? boss.sprite : (d.sprite.idle || d.sprite);
+    const pal = boss ? boss.pal : d.palette;
+
+    const card = document.createElement('div');
+    card.className = 'shop-card';
+
+    const head = document.createElement('div');
+    head.className = 'card-head';
+    head.appendChild(spriteIconCanvas(sprite, pal));
+    const id = document.createElement('div');
+    id.className = 'card-id';
+    id.innerHTML = `
+        <div class="card-name">${d.name}</div>
+        <div class="card-sub"><span class="card-type">ボス</span></div>`;
+    head.appendChild(id);
+
+    const body = document.createElement('div');
+    body.innerHTML = `
+        <div class="card-stats">
+            <span><b>体力</b>${hp}/${maxHp}</span>
+            <span><b>攻撃力</b>${Math.round(dmg)}</span>
+            <span><b>移動速度</b>${Math.round(d.speed * 100)}</span>
+            <span><b>間合い</b>${d.range ? '遠距離' : '近接'}</span>
+        </div>
+        <div class="card-comment">${bossAbilityDesc(d)}</div>`;
+
+    card.appendChild(head);
+    card.appendChild(body);
+    return card;
+}
+
 // ユニット種別レベルアップの購入
 function buyUnitLevel(key) {
     if(unitLevelMult(key) >= effectiveUnitLevelCap(key)) { toast('これ以上は強化できません'); return; }
@@ -1988,6 +2090,13 @@ function buyUnitLevel(key) {
 }
 
 function renderShop() {
+    // タブボタンの表示は常にstate.shopTabに同期させる。backToTitle()などで
+    // state.shopTabを直接書き換えた場合でもズレないよう、renderShop()側で
+    // 毎回揃える(タブは選択中なのに中身が違う、という表示崩れの防止)
+    document.getElementById('tab-units').classList.toggle('active', state.shopTab === 'units');
+    document.getElementById('tab-upgrades').classList.toggle('active', state.shopTab === 'upgrades');
+    document.getElementById('tab-tactics').classList.toggle('active', state.shopTab === 'tactics');
+
     const list = document.getElementById('shop-list');
     list.innerHTML = '';
     list.classList.toggle('single-col', state.shopTab !== 'units');
@@ -2090,9 +2199,9 @@ function showUnitInfo(key, isP, sx, sy, sellEntry) {
 
     const side = document.createElement('div');
     side.className = 'info-side ' + (isP ? 'mine' : 'foe');
-    side.textContent = isP ? '▲ 味方ユニット' : '▼ 敵ユニット';
+    side.textContent = isP ? '▲ 味方ユニット' : (key === '__boss__' ? '▼ ボス' : '▼ 敵ユニット');
     box.appendChild(side);
-    box.appendChild(buildUnitCard(key, { showCost: false, enemy: !isP }));
+    box.appendChild(key === '__boss__' ? buildBossCard() : buildUnitCard(key, { showCost: false, enemy: !isP }));
 
     if(sellEntry) {
         const sell = document.createElement('button');
@@ -2129,10 +2238,22 @@ function hideUnitInfo() {
     document.getElementById('unit-info').classList.remove('show');
 }
 
+// ボス（バトル中の実体、または準備フェーズのプレビュー固定位置）への
+// タップ判定。スプライトの実寸(足元アンカー)から矩形で判定する
+function bossHitAt(sprite, scale, cx, cy, x, y) {
+    const box = getSpriteBox(sprite);
+    const halfW = box.w * scale / 2;
+    const h = box.h * scale;
+    return Math.abs(cx - x) <= halfW && (cy - y) >= -8 && (cy - y) <= h + 8;
+}
+
 // 指定座標にいるユニット（準備フェーズは編成データ、バトル中は実体）を探す
 function unitAtPoint(x, y) {
     // バトル中は実際に動いているユニットから探す
     if(state.scene === 'battle') {
+        if(state.boss && bossHitAt(state.boss.sprite, state.boss.scale, state.boss.x, state.boss.y, x, y)) {
+            return { key: '__boss__', isP: false };
+        }
         let hit = null, bd = 26;
         state.units.forEach(u => {
             const d = Math.hypot(u.x - x, u.y - y - 12);
@@ -2140,8 +2261,15 @@ function unitAtPoint(x, y) {
         });
         return hit;
     }
-    // 準備フェーズは敵（AI編成 / STORYの敵プレビュー）のみ対象。
-    // 味方のタップは売却に使うため
+    // 準備フェーズ: STORYはボスのプレビュー（固定位置）もタップ対象に含める
+    if(state.mode === 'story' && BOSS_DEFS[state.round]) {
+        const d = BOSS_DEFS[state.round];
+        const sprite = d.sprite.idle || d.sprite;
+        if(bossHitAt(sprite, 3.5, state.w / 2, 130 + topInset(), x, y)) {
+            return { key: '__boss__', isP: false };
+        }
+    }
+    // 敵（AI編成 / STORYの敵プレビュー）のみ対象。味方のタップは売却に使うため
     let hit = null, bd = 26;
     state.aiRoster.concat(state.storyEnemies).forEach(r => {
         const d = Math.hypot(r.x - x, r.y - y - 10);
@@ -2267,11 +2395,8 @@ function updatePrepUI() {
 
 function setTab(tab) {
     state.shopTab = tab;
-    document.getElementById('tab-units').classList.toggle('active', tab === 'units');
-    document.getElementById('tab-upgrades').classList.toggle('active', tab === 'upgrades');
-    document.getElementById('tab-tactics').classList.toggle('active', tab === 'tactics');
     state.selected = null;
-    renderShop();
+    renderShop(); // タブボタンのactive表示もrenderShop内で同期される
 }
 
 // ------------------------------------------------------------
@@ -2498,9 +2623,15 @@ function updateProjectiles(dt) {
                 state.units.forEach(u => {
                     if(u.isP !== p.isP && Math.hypot(u.x - p.x, u.y - p.y) < p.def.splash) {
                         u.takeDmg(p.dmg, p.owner);
-                        const a = Math.atan2(u.y - p.y, u.x - p.x);
-                        u.vx += Math.cos(a) * 3;
-                        u.vy += Math.sin(a) * 3;
+                        // ノックバックはp.def.kbを持つ場合のみ(近接と同じmass基準の式に統一)。
+                        // 遠距離・範囲ユニットはkb:0なので、ここで固定値を足すと
+                        // 「ノックバックなし」の設定を無視してしまうバグになっていた
+                        if(p.def.kb && u.vx !== undefined) {
+                            const a = Math.atan2(u.y - p.y, u.x - p.x);
+                            const k = Math.min(KNOCKBACK_CAP, (p.def.kb / (u.def && u.def.mass ? u.def.mass : 2)) * KNOCKBACK_MULT);
+                            u.vx += Math.cos(a) * k;
+                            u.vy += Math.sin(a) * k;
+                        }
                     }
                 });
                 if(p.isP && state.boss && Math.hypot(state.boss.x - p.x, state.boss.y - p.y) < p.def.splash) {
@@ -3156,6 +3287,12 @@ function bindEvents() {
     // タイトル
     document.getElementById('btn-newgame').addEventListener('click', () => {
         renderRecords();
+        // モード選択ボタンの見た目をstate.selectedModeに同期させる
+        // （ショップタブと同種のズレ防止。前回選んだモードを覚えたまま
+        // 表示だけタイトルへ戻る前の状態に取り残されないようにする）
+        document.querySelectorAll('.menu-btn[data-mode]').forEach(x => {
+            x.classList.toggle('selected', x.dataset.mode === state.selectedMode);
+        });
         showScreen('screen-mode');
     });
     document.getElementById('btn-continue').addEventListener('click', loadGame);
@@ -3171,11 +3308,17 @@ function bindEvents() {
     // 説明ポップアップ自体をタップしたら閉じる
     document.getElementById('unit-info').addEventListener('click', hideUnitInfo);
     document.getElementById('btn-update').addEventListener('click', forceUpdate);
+    document.getElementById('btn-clear-records').addEventListener('click', onClearRecordsClick);
 
-    // モード選択
-    document.getElementById('btn-mode-story').addEventListener('click', () => startNewGame('story'));
-    document.getElementById('btn-mode-survival').addEventListener('click', () => startNewGame('survival'));
-    document.getElementById('btn-mode-versus').addEventListener('click', () => startNewGame('versus'));
+    // モード選択（難易度と同じく「選択してからSTART」方式。誤タップで
+    // 即開始してしまわないように、モードボタンは選択のみを行う）
+    document.querySelectorAll('.menu-btn[data-mode]').forEach(b => {
+        b.addEventListener('click', () => {
+            state.selectedMode = b.dataset.mode;
+            document.querySelectorAll('.menu-btn[data-mode]').forEach(x => x.classList.toggle('selected', x === b));
+        });
+    });
+    document.getElementById('btn-mode-start').addEventListener('click', () => startNewGame(state.selectedMode || 'story'));
     document.getElementById('btn-mode-back').addEventListener('click', backToTitle);
     document.getElementById('btn-home').addEventListener('click', backToTitle);
     document.querySelectorAll('.diff-btn').forEach(b => {

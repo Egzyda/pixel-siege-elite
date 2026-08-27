@@ -413,7 +413,10 @@ body {
 /* バッジ(近接/遠距離・範囲・Lv等)が入りきらない場合はバッジ単位で折り返す。
    単語の途中で改行されて崩れるのを防ぐため、各バッジは white-space: nowrap で
    1行を維持したまま複数行に流す */
-.card-sub { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 4px; row-gap: 3px; margin-top: 1px; }
+/* min-height は1行/2行の折り返し変化でカードの高さが変わらないようにするための
+   保険（ゴールドやレベルの桁数が増えてバッジ幅が変わり、折り返し行数が
+   変化した場合でも高さがズレないようにする） */
+.card-sub { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 4px; row-gap: 3px; margin-top: 1px; min-height: 26px; }
 .card-type {
     font-size: 8.5px;
     font-weight: 700;
@@ -670,6 +673,8 @@ body {
     line-height: 1.2;
 }
 .diff-btn.active { background: var(--panel2); color: #fff; border-color: var(--accent); }
+/* モード選択ボタン。難易度と同じく「選択」であり、タップで即開始しない */
+.menu-btn.selected { background: var(--panel2); border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .diff-btn small { display: block; font-size: 8.5px; color: var(--gold); font-weight: 800; min-height: 10px; }
 .section-label {
     font-size: 9px;
@@ -699,6 +704,8 @@ body {
     cursor: pointer;
     z-index: 55;
 }
+/* 記録消去ボタンは更新ボタンの反対側(左下)に配置する */
+.corner-btn-left { right: auto; left: 14px; }
 
 .result-title {
     font-size: 42px;
@@ -1005,23 +1012,24 @@ body {
         <button class="menu-btn plain" id="btn-codex">ユニット図鑑</button>
         <button class="menu-btn plain" id="btn-howto">? あそびかた</button>
 
+        <button class="corner-btn corner-btn-left" id="btn-clear-records">🗑 記録を消去</button>
         <button class="corner-btn" id="btn-update">⟳ 更新</button>
     </div>
 
     <!-- モード選択画面 -->
     <div class="screen" id="screen-mode">
         <div class="section-label">SELECT MODE</div>
-        <button class="menu-btn" id="btn-mode-story">
+        <button class="menu-btn selected" id="btn-mode-story" data-mode="story">
             <div class="menu-name">STORY</div>
             <div class="menu-desc">全10ステージ。配置された敵とボスを撃破して進む1人用モード。</div>
             <div class="menu-badge" id="badge-story"></div>
         </button>
-        <button class="menu-btn" id="btn-mode-survival">
+        <button class="menu-btn" id="btn-mode-survival" data-mode="survival">
             <div class="menu-name">SURVIVAL</div>
             <div class="menu-desc">配置上限なし。AI と延々戦い、何ラウンド生き残れるかに挑戦。</div>
             <div class="menu-badge" id="badge-survival"></div>
         </button>
-        <button class="menu-btn" id="btn-mode-versus">
+        <button class="menu-btn" id="btn-mode-versus" data-mode="versus">
             <div class="menu-name">VERSUS</div>
             <div class="menu-desc">体力制の対戦。負けたラウンドごとに相手の残存戦力ぶんダメージ。</div>
             <div class="menu-badge" id="badge-versus"></div>
@@ -1033,6 +1041,7 @@ body {
             <button class="diff-btn active" data-diff="normal">NORMAL<small id="diff-mark-normal"></small></button>
             <button class="diff-btn" data-diff="hard">HARD<small id="diff-mark-hard"></small></button>
         </div>
+        <button class="menu-btn big fill" id="btn-mode-start">START</button>
         <button class="menu-btn plain" id="btn-mode-back">← タイトルへ戻る</button>
     </div>
 
