@@ -267,7 +267,7 @@ class Base {
 
         let target = null, bd = Infinity;
         for(const u of state.units) {
-            if(u.isP === this.isP || u.hp <= 0) continue;
+            if(u.isP === this.isP || u.hp <= 0 || u.invisible) continue;
             const d = dist(u, this);
             if(d < bd && d <= this.range) { bd = d; target = u; }
         }
@@ -350,6 +350,7 @@ class Unit {
         this.beamTickTimer = 0;
         this.summonTimer = 0;               // 定期召喚(ストーンなど)の経過フレーム
         this.reviveCd = 0;                  // 蘇生(ロードなど)のクールタイム。0なら発動可能
+        this.invisible = !!this.def.stealthUntilEngage; // 接敵するまで敵から狙われない透明化(インプなど)
     }
 
     // 攻撃対象を探す
@@ -376,7 +377,7 @@ class Unit {
 
         let best = null, bd = Infinity;
         for(const u of state.units) {
-            if(u.isP === this.isP || u.hp <= 0) continue;
+            if(u.isP === this.isP || u.hp <= 0 || u.invisible) continue;
             const d = dist(u, this);
             if(d < bd) { bd = d; best = u; }
         }
@@ -468,6 +469,9 @@ class Unit {
         if(target) {
             const d = dist(target, this);
             const reach = this.range + (target.radius || 0);
+
+            // 接敵(射程内到達)すると透明化が解ける(インプなど)
+            if(this.invisible && d <= reach) this.invisible = false;
 
             if(d <= reach) {
                 if(this.def.type === 'beam') {
@@ -602,6 +606,9 @@ class Unit {
     draw(ctx) {
         const bounce = Math.abs(Math.sin(this.anim)) * 2.5;
 
+        // 透明化中(インプなど)は半透明にして、観戦側からは狙われていない状態と分かるようにする
+        if(this.invisible) ctx.globalAlpha = 0.4;
+
         drawShadow(ctx, this.def.sprite, this.x, this.y, this.scale, 0.35);
 
         // 陣営が一目で分かるように足元にリングを描く
@@ -621,6 +628,8 @@ class Unit {
         const box = getSpriteBox(this.def.sprite);
         const topY = this.y - bounce - box.h * this.scale - 6;
         drawHpBar(ctx, this.x, topY, 22, 4, this.hp / this.max, this.isP ? '#10b981' : '#ef4444');
+
+        if(this.invisible) ctx.globalAlpha = 1;
     }
 }
 
@@ -747,7 +756,7 @@ class Boss {
         // 最も近いプレイヤーユニットを狙い、いなければ拠点へ向かう
         let target = null, bd = Infinity;
         for(const u of state.units) {
-            if(!u.isP) continue;
+            if(!u.isP || u.invisible) continue;
             const d = dist(u, this);
             if(d < bd) { bd = d; target = u; }
         }

@@ -126,7 +126,8 @@ const UNIT_DEFS = {
     imp: {
         name:'インプ', cost:55, hp:130, dmg:34, range:24, speed:0.90, rate:40,
         type:'melee', mass:1.0, kb:8, scale:2.2, sprite:SPRITES.boss_demon.idle, pal:PALETTES.boss_titan,
-        comment:'圧倒的な速さで急襲する俊敏な小悪魔。打たれ弱い'
+        stealthUntilEngage:true, // 接敵(射程内到達)するまで敵から狙われない透明化状態
+        comment:'接敵するまで透明化しており、敵から狙われない。圧倒的な速さで急襲する俊敏な小悪魔。打たれ弱い'
     },
     stoneGuardian: {
         // ゴーレムとの役割被りを避けるため、単体性能は抑えて「数秒ごとにミニストーンを
