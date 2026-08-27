@@ -664,6 +664,10 @@ body {
     color: var(--gold);
 }
 
+/* #screen-mode は align-items:center のため、幅を明示しない子要素は
+   中身に合わせて縮んでしまう(ラベル文字列が短いSTORY EXTRAのトグルで
+   極端に潰れて見えた)。他の.menu-btn等と同じ幅で揃うように明示する */
+#diff-section, #story-extra-section { width: 100%; max-width: 300px; }
 .diff-row { display: flex; gap: 6px; width: 100%; max-width: 300px; margin: 4px 0 14px; }
 .diff-btn {
     flex: 1;
@@ -1025,6 +1029,7 @@ body {
             <div class="menu-badge" id="badge-story"></div>
         </button>
         <div id="story-extra-section" style="display:none">
+            <div class="section-label" style="margin-top:2px">STORY EXTRA（クリア後に解禁）</div>
             <div class="diff-row" id="story-extra-row">
                 <button class="diff-btn active" data-story-extra="false">通常</button>
                 <button class="diff-btn" data-story-extra="true">EXTRA<small id="story-extra-mark"></small></button>
