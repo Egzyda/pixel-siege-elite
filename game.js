@@ -34,6 +34,7 @@ const state = {
     units: [],                // バトル中のユニット実体
     projs: [], fx: [], popups: [],
     playerCorpses: [],        // 戦死した味方の種類キュー（ロードの蘇生用）
+    enemyCorpses: [],         // 戦死した敵の種類キュー（敵ロードの蘇生用）
     boss: null,
     playerBase: null,
     enemyBase: null,
@@ -416,12 +417,15 @@ class Unit {
 
         // 蘇生（ロードなど）。倒れた味方がいなければ何もしない。
         // reviveCd は初期値0なので、味方が倒れた直後にクールタイム待ちでなければ
-        // 即座に発動する。一度発動すると reviveInterval の間は再発動しない
-        if(this.def.reviveAlly && this.isP) {
+        // 即座に発動する。一度発動すると reviveInterval の間は再発動しない。
+        // プレイヤー・敵どちらが購入しても同じように機能させるため、
+        // 自陣営(this.isP)の死体プールを見る
+        if(this.def.reviveAlly) {
+            const corpses = this.isP ? state.playerCorpses : state.enemyCorpses;
             if(this.reviveCd > 0) this.reviveCd -= dt;
-            if(this.reviveCd <= 0 && state.playerCorpses.length > 0) {
-                const key = state.playerCorpses.shift();
-                state.units.push(new Unit(key, true,
+            if(this.reviveCd <= 0 && corpses.length > 0) {
+                const key = corpses.shift();
+                state.units.push(new Unit(key, this.isP,
                     clamp(this.x + randRange(-30, 30), 20, state.w - 20),
                     clamp(this.y - 20, 24, state.h - 14)));
                 this.reviveCd = this.def.reviveInterval;
@@ -658,8 +662,11 @@ function onUnitDeath(u) {
             state.boss.corpses.push(u.key);
             if(state.boss.corpses.length > 12) state.boss.corpses.shift();
         }
+        // 敵のロード用に死体を記録（蘇生に使う）
+        state.enemyCorpses.push(u.key);
+        if(state.enemyCorpses.length > 12) state.enemyCorpses.shift();
     } else {
-        // ロード用に味方の死体を記録（蘇生に使う）
+        // 味方のロード用に死体を記録（蘇生に使う）
         state.playerCorpses.push(u.key);
         if(state.playerCorpses.length > 12) state.playerCorpses.shift();
     }
@@ -1028,6 +1035,7 @@ function fireTactic(key) {
 function deployRoster() {
     state.units = [];
     state.playerCorpses = []; // ロードの蘇生用。バトル開始のたびに空にする
+    state.enemyCorpses = [];  // 敵ロードの蘇生用。同上
     // 準備フェーズとバトルは常に同じfieldScaleのワールド座標を使うため、
     // 編成の座標(r.x, r.y)をそのまま使ってよい
     state.roster.forEach(r => {
