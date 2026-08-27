@@ -383,6 +383,10 @@ body {
     padding: 7px 8px;
     cursor: pointer;
     transition: border-color 0.12s, transform 0.08s, background 0.12s;
+    /* グリッドで同じ行の高さに揃えられた際、強化/レベル増減ボタンが
+       常に下端に揃うようにする(コメント文の長さでボタン位置がバラつくのを防ぐ) */
+    display: flex;
+    flex-direction: column;
 }
 .shop-card:active { transform: scale(0.98); }
 .shop-card.selected {
@@ -459,7 +463,7 @@ body {
     display: flex;
     align-items: center;
     gap: 6px;
-    margin-top: 6px;
+    margin-top: auto; /* カード内で下端に押し付ける(コメント文の長さに関わらず揃える) */
     padding-top: 6px;
     border-top: 1px dashed rgba(148,163,184,0.2);
 }
