@@ -193,10 +193,12 @@ function maxUnitsFor(mode) {
 const BUDGETS = [80, 110, 140, 180, 220, 270, 320];
 const EXTRA_BUDGET_STEP = 60;
 
-// STORY EXTRA（後述）用に予算を絞ったテーブル。STORY以外のモードでは使わない
+// STORY EXTRA（後述）用に予算を絞ったテーブル。STORY以外のモードでは使わない。
+// BUDGETSが全て10単位の切りの良い数字なので、EXTRAも10単位に丸めて揃える
+// （単純に0.9倍しただけだと72G・99G等の半端な数字になり見栄えが悪かったため）
 const STORY_EXTRA_BUDGET_MULT = 0.9;
-const BUDGETS_EXTRA = BUDGETS.map(b => Math.round(b * STORY_EXTRA_BUDGET_MULT));
-const EXTRA_BUDGET_STEP_EXTRA = Math.round(EXTRA_BUDGET_STEP * STORY_EXTRA_BUDGET_MULT);
+const BUDGETS_EXTRA = BUDGETS.map(b => Math.round(b * STORY_EXTRA_BUDGET_MULT / 10) * 10);
+const EXTRA_BUDGET_STEP_EXTRA = Math.round(EXTRA_BUDGET_STEP * STORY_EXTRA_BUDGET_MULT / 10) * 10;
 
 function budgetForRound(round) {
     // STORY EXTRA中はSTORYの予算だけ絞る（SURVIVAL/VERSUSやSTORY通常には影響しない）
