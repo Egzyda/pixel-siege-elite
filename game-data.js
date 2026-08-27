@@ -192,9 +192,18 @@ function maxUnitsFor(mode) {
 const BUDGETS = [80, 110, 140, 180, 220, 270, 320];
 const EXTRA_BUDGET_STEP = 60;
 
+// STORY EXTRA（後述）用に予算を絞ったテーブル。STORY以外のモードでは使わない
+const STORY_EXTRA_BUDGET_MULT = 0.9;
+const BUDGETS_EXTRA = BUDGETS.map(b => Math.round(b * STORY_EXTRA_BUDGET_MULT));
+const EXTRA_BUDGET_STEP_EXTRA = Math.round(EXTRA_BUDGET_STEP * STORY_EXTRA_BUDGET_MULT);
+
 function budgetForRound(round) {
-    if(round <= BUDGETS.length) return BUDGETS[round - 1];
-    return BUDGETS[BUDGETS.length - 1] + (round - BUDGETS.length) * EXTRA_BUDGET_STEP;
+    // STORY EXTRA中はSTORYの予算だけ絞る（SURVIVAL/VERSUSやSTORY通常には影響しない）
+    const extra = state.mode === 'story' && state.storyExtra;
+    const table = extra ? BUDGETS_EXTRA : BUDGETS;
+    const step = extra ? EXTRA_BUDGET_STEP_EXTRA : EXTRA_BUDGET_STEP;
+    if(round <= table.length) return table[round - 1];
+    return table[table.length - 1] + (round - table.length) * step;
 }
 
 // ============================================================
@@ -270,6 +279,25 @@ const STORY_STAGES = {
 };
 
 const STORY_LAST_WAVE = 10;
+
+// ============================================================
+// STORY EXTRA（初回全クリア後に解禁されるNG+的な高難度周回）
+// 適応難易度（プレイヤーの育成度を見て動的に敵を強くする仕組み）は過去に
+// 撤回済みのため導入しない。あくまで固定ウェーブ側の敵数・ボス性能・予算を
+// あらかじめ底上げした「もう1本の固定台本」として用意し、プレイヤーの
+// 状態は一切参照しない（誰がプレイしても同じ内容になる）
+// ============================================================
+const STORY_EXTRA_ENEMY_MULT = 1.15;  // 雑魚の数
+
+const STORY_STAGES_EXTRA = {};
+Object.keys(STORY_STAGES).forEach(k => {
+    STORY_STAGES_EXTRA[k] = {
+        enemies: STORY_STAGES[k].enemies.map(e => ({
+            ...e, count: Math.max(e.count, Math.round(e.count * STORY_EXTRA_ENEMY_MULT))
+        }))
+    };
+});
+// BOSS_DEFS_EXTRA・テーブル解決ヘルパーはBOSS_DEFS定義後（このファイル末尾側）で追加する
 
 // フィールドを縦横均一に拡大する（見た目は縮小表示になり、画面のスクロールは
 // 発生しない）。準備フェーズとバトルでサイズが変わるとユニットの位置が
@@ -348,6 +376,27 @@ const BOSS_DEFS = {
         ]
     }
 };
+
+// STORY EXTRA用にHP・攻撃力を底上げしたボス版（STORY_STAGES_EXTRAの解説を参照）
+const STORY_EXTRA_BOSS_MULT = 1.25;
+const BOSS_DEFS_EXTRA = {};
+Object.keys(BOSS_DEFS).forEach(k => {
+    const d = BOSS_DEFS[k];
+    BOSS_DEFS_EXTRA[k] = {
+        ...d,
+        hp: Math.round(d.hp * STORY_EXTRA_BOSS_MULT),
+        dmg: Math.round(d.dmg * STORY_EXTRA_BOSS_MULT),
+        fireDamage: d.fireDamage ? Math.round(d.fireDamage * STORY_EXTRA_BOSS_MULT) : d.fireDamage
+    };
+});
+
+// 現在のモード/state.storyExtraに応じて使うべきテーブルを返す
+function currentStoryStages() {
+    return (state.mode === 'story' && state.storyExtra) ? STORY_STAGES_EXTRA : STORY_STAGES;
+}
+function currentBossDefs() {
+    return (state.mode === 'story' && state.storyExtra) ? BOSS_DEFS_EXTRA : BOSS_DEFS;
+}
 
 // ============================================================
 // 強化（ショップの「強化」タブ）

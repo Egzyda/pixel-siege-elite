@@ -18,6 +18,7 @@ const state = {
     scene: 'title',           // title / mode / prep / battle / result
     mode: 'story',            // story（ステージ） / survival（無限） / versus（体力制対戦）
     difficulty: 'normal',     // AI 対戦モードの難易度
+    storyExtra: false,        // STORY EXTRA（初回全クリア後に解禁される高難度周回）中か
     round: 1,                 // ウェーブ番号 / ラウンド番号
     gold: 0,                  // 残予算
 
@@ -667,7 +668,7 @@ function onUnitDeath(u) {
 // ============================================================
 class Boss {
     constructor(waveNum) {
-        this.data = BOSS_DEFS[waveNum];
+        this.data = currentBossDefs()[waveNum];
         this.hp = this.data.hp;
         this.maxHp = this.data.hp;
         this.dmg = this.data.dmg;
@@ -1552,7 +1553,9 @@ function showResultScreen() {
         if(r.isFinalStory) {
             title.textContent = 'ALL CLEAR';
             title.className = 'result-title win';
-            msg.textContent = `全${STORY_LAST_WAVE}ステージ制覇！ 見事な采配だ。`;
+            msg.textContent = state.storyExtra
+                ? `EXTRA全${STORY_LAST_WAVE}ステージ制覇！ 強化された台本を攻略した。`
+                : `全${STORY_LAST_WAVE}ステージ制覇！ 見事な采配だ。`;
             showRetry = false;
         } else if(r.win || r.isDraw) {
             title.textContent = r.isDraw ? 'DRAW' : 'VICTORY';
@@ -1594,7 +1597,7 @@ function showResultScreen() {
 // ============================================================
 function defaultRecords() {
     return {
-        story: { cleared: false, bestWave: 0, clearCount: 0 },
+        story: { cleared: false, bestWave: 0, clearCount: 0, extraCleared: false, extraBestWave: 0, extraClearCount: 0 },
         survival: { easy: 0, normal: 0, hard: 0 },
         versus: { easy: { win: 0, lose: 0 }, normal: { win: 0, lose: 0 }, hard: { win: 0, lose: 0 } }
     };
@@ -1646,10 +1649,18 @@ function updateRecords() {
 
     if(state.mode === 'story') {
         const reached = r.win ? state.round : state.round;
-        rec.story.bestWave = Math.max(rec.story.bestWave, Math.min(STORY_LAST_WAVE, reached));
-        if(r.isFinalStory) {
-            rec.story.cleared = true;
-            rec.story.clearCount++;
+        if(state.storyExtra) {
+            rec.story.extraBestWave = Math.max(rec.story.extraBestWave, Math.min(STORY_LAST_WAVE, reached));
+            if(r.isFinalStory) {
+                rec.story.extraCleared = true;
+                rec.story.extraClearCount++;
+            }
+        } else {
+            rec.story.bestWave = Math.max(rec.story.bestWave, Math.min(STORY_LAST_WAVE, reached));
+            if(r.isFinalStory) {
+                rec.story.cleared = true;
+                rec.story.clearCount++;
+            }
         }
     } else if(state.mode === 'survival') {
         const reached = state.round - 1;
@@ -1678,9 +1689,11 @@ function renderRecords() {
     const vsWin = ['easy', 'normal', 'hard'].reduce((n, d) => n + (rec.versus[d].win || 0), 0);
     const vsLose = ['easy', 'normal', 'hard'].reduce((n, d) => n + (rec.versus[d].lose || 0), 0);
 
-    const storyText = rec.story.cleared
-        ? `<span class="crown">★ 全クリア${rec.story.clearCount > 1 ? ' ×' + rec.story.clearCount : ''}</span>`
-        : (rec.story.bestWave > 0 ? `STAGE ${rec.story.bestWave} 到達` : '未プレイ');
+    const storyText = rec.story.extraCleared
+        ? `<span class="crown">★ EXTRA全クリア${rec.story.extraClearCount > 1 ? ' ×' + rec.story.extraClearCount : ''}</span>`
+        : rec.story.cleared
+            ? `<span class="crown">★ 全クリア${rec.story.clearCount > 1 ? ' ×' + rec.story.clearCount : ''}</span>`
+            : (rec.story.bestWave > 0 ? `STAGE ${rec.story.bestWave} 到達` : '未プレイ');
     const survText = survBest > 0
         ? `ROUND ${survBest} <small>(${DIFF_LABEL[survBestDiff]})</small>` : '未プレイ';
     const vsText = (vsWin + vsLose) > 0 ? `${vsWin}勝${vsLose}敗` : '未プレイ';
@@ -1693,7 +1706,8 @@ function renderRecords() {
 
     // モード選択のバッジ
     const bs = document.getElementById('badge-story');
-    if(bs) bs.innerHTML = rec.story.cleared ? '★ CLEAR' : (rec.story.bestWave ? 'W' + rec.story.bestWave : '');
+    if(bs) bs.innerHTML = rec.story.extraCleared ? '★ EXTRA CLEAR'
+        : (rec.story.cleared ? '★ CLEAR' : (rec.story.bestWave ? 'W' + rec.story.bestWave : ''));
     const bv = document.getElementById('badge-survival');
     if(bv) bv.textContent = survBest > 0 ? 'BEST R' + survBest : '';
     const bt = document.getElementById('badge-versus');
@@ -1708,6 +1722,13 @@ function renderRecords() {
         if(rec.survival[d] > 0) marks.push('R' + rec.survival[d]);
         el.textContent = marks.join(' ');
     });
+
+    // STORY EXTRAのクリア回数マーク
+    const extraMark = document.getElementById('story-extra-mark');
+    if(extraMark) extraMark.textContent = rec.story.extraClearCount > 0 ? '★' + rec.story.extraClearCount : '';
+
+    // 解禁状況・選択中モードに応じて、難易度セレクタ／STORY EXTRAトグルの表示を更新
+    syncModeSelectExtras();
 }
 
 // ============================================================
@@ -1778,6 +1799,7 @@ function retryRound() {
 // 新規ゲーム開始
 function startNewGame(mode) {
     state.mode = mode;
+    if(mode !== 'story') state.storyExtra = false; // EXTRAはSTORY専用のフラグ
     state.round = 1;
     state.gold = budgetForRound(1);
     state.roster = [];
@@ -1800,7 +1822,7 @@ function startNewGame(mode) {
     enterPrep();
 
     const diff = AI_PRESETS[state.difficulty].label;
-    if(mode === 'story') toast('STORY モード開始');
+    if(mode === 'story') toast(state.storyExtra ? 'STORY EXTRA 開始 — 固定ウェーブが強化された高難度版' : 'STORY モード開始');
     else if(mode === 'survival') toast(`SURVIVAL 開始（${diff}）— 配置上限なし`);
     else toast(`VERSUS 開始（${diff}）— 体力 ${VERSUS_LIFE} / 配置上限なし`);
 
@@ -1839,7 +1861,7 @@ function backToTitle() {
 function saveGame() {
     try {
         localStorage.setItem(SAVE_KEY, JSON.stringify({
-            mode: state.mode, difficulty: state.difficulty,
+            mode: state.mode, difficulty: state.difficulty, storyExtra: state.storyExtra,
             round: state.round, gold: state.gold,
             roster: state.roster, aiRoster: state.aiRoster, aiGold: state.aiGold,
             aiPower: state.aiPower, aiUnitLevels: state.aiUnitLevels,
@@ -1866,6 +1888,7 @@ function loadGame() {
         const s = JSON.parse(raw);
         state.mode = s.mode;
         state.difficulty = s.difficulty || 'normal';
+        state.storyExtra = s.storyExtra || false;
         state.round = s.round;
         state.gold = s.gold;
         state.roster = s.roster || [];
@@ -2086,7 +2109,7 @@ function bossAbilityDesc(d) {
 // 準備フェーズのプレビューでは BOSS_DEFS の素の値を渡す
 function buildBossCard() {
     const boss = state.boss;
-    const d = boss ? boss.data : BOSS_DEFS[state.round];
+    const d = boss ? boss.data : currentBossDefs()[state.round];
     const hp = boss ? Math.max(0, Math.round(boss.hp)) : d.hp;
     const maxHp = boss ? boss.maxHp : d.hp;
     const dmg = boss ? boss.dmg : d.dmg;
@@ -2317,8 +2340,8 @@ function unitAtPoint(x, y) {
         return hit;
     }
     // 準備フェーズ: STORYはボスのプレビュー（固定位置）もタップ対象に含める
-    if(state.mode === 'story' && BOSS_DEFS[state.round]) {
-        const d = BOSS_DEFS[state.round];
+    if(state.mode === 'story' && currentBossDefs()[state.round]) {
+        const d = currentBossDefs()[state.round];
         const sprite = d.sprite.idle || d.sprite;
         if(bossHitAt(sprite, 3.5, state.w / 2, 130 + topInset(), x, y)) {
             return { key: '__boss__', isP: false };
@@ -2638,7 +2661,7 @@ function onPointerUp(e) {
 // 配置(spawnStoryStage)の両方で同じ座標を使う（作り直すと見た目と
 // 実際の配置がずれてしまうため）
 function buildStoryEnemyPreview() {
-    const conf = STORY_STAGES[state.round];
+    const conf = currentStoryStages()[state.round];
     const lay = layout();
     const spawnFar = 150 + topInset();       // 奥（ボスに近い側）
     const spawnNear = lay.deployTop - 20;    // 手前（配置エリアのすぐ上）
@@ -2900,7 +2923,7 @@ function updateHud() {
 
     const diff = AI_PRESETS[state.difficulty].label;
     if(state.mode === 'story') {
-        left.textContent = `STORY  STAGE ${state.round}/${STORY_LAST_WAVE}`;
+        left.textContent = `STORY${state.storyExtra ? ' EXTRA' : ''}  STAGE ${state.round}/${STORY_LAST_WAVE}`;
     } else if(state.mode === 'survival') {
         left.textContent = `SURVIVAL  R${state.round}  ${diff}`;
     } else {
@@ -3181,7 +3204,7 @@ function drawRosterPreview() {
 
 // STORY: 準備フェーズでのボスのプレビュー表示（実際の出現位置・見た目と一致させる）
 function drawStoryBossPreview(t) {
-    const data = BOSS_DEFS[state.round];
+    const data = currentBossDefs()[state.round];
     if(!data) return;
     const x = state.w / 2, y = 130 + topInset();
     const sprite = data.sprite.idle || data.sprite;
@@ -3336,11 +3359,15 @@ function resize() {
     if(state.scene === 'prep') clampRosters();
 }
 
-// STORYには難易度(EASY/NORMAL/HARD)が影響しないため、STORY選択中は
-// 難易度セレクタごと非表示にする（SURVIVAL/VERSUSでは表示する）
-function syncDiffSectionVisibility() {
+// モード選択画面で、選択中のモードに応じた追加セクションの表示を切り替える。
+// ・難易度セレクタ(EASY/NORMAL/HARD): STORYには影響しないため、STORY選択中は非表示
+// ・STORY EXTRAトグル: STORYを選択中、かつ通常STORYを全クリア済みの場合のみ表示
+function syncModeSelectExtras() {
     document.getElementById('diff-section').style.display =
         state.selectedMode === 'story' ? 'none' : '';
+    const rec = state.records || defaultRecords();
+    const extraUnlocked = state.selectedMode === 'story' && rec.story.cleared;
+    document.getElementById('story-extra-section').style.display = extraUnlocked ? '' : 'none';
 }
 
 function bindEvents() {
@@ -3362,7 +3389,10 @@ function bindEvents() {
         document.querySelectorAll('.menu-btn[data-mode]').forEach(x => {
             x.classList.toggle('selected', x.dataset.mode === state.selectedMode);
         });
-        syncDiffSectionVisibility();
+        // STORY EXTRAトグルの見た目もstate.storyExtraに同期させる（同上の理由）
+        document.querySelectorAll('#story-extra-row .diff-btn').forEach(x => {
+            x.classList.toggle('active', (x.dataset.storyExtra === 'true') === !!state.storyExtra);
+        });
         showScreen('screen-mode');
     });
     document.getElementById('btn-continue').addEventListener('click', loadGame);
@@ -3386,17 +3416,27 @@ function bindEvents() {
         b.addEventListener('click', () => {
             state.selectedMode = b.dataset.mode;
             document.querySelectorAll('.menu-btn[data-mode]').forEach(x => x.classList.toggle('selected', x === b));
-            syncDiffSectionVisibility();
+            syncModeSelectExtras();
         });
     });
     document.getElementById('btn-mode-start').addEventListener('click', () => startNewGame(state.selectedMode || 'story'));
     document.getElementById('btn-mode-back').addEventListener('click', backToTitle);
     document.getElementById('btn-home').addEventListener('click', backToTitle);
-    document.querySelectorAll('.diff-btn').forEach(b => {
+    document.querySelectorAll('#diff-row .diff-btn').forEach(b => {
         b.addEventListener('click', () => {
             state.difficulty = b.dataset.diff;
-            document.querySelectorAll('.diff-btn').forEach(x => x.classList.toggle('active', x === b));
+            document.querySelectorAll('#diff-row .diff-btn').forEach(x => x.classList.toggle('active', x === b));
             toast(`難易度: ${AI_PRESETS[state.difficulty].label} — ${AI_PRESETS[state.difficulty].desc}`);
+        });
+    });
+    // STORY EXTRA（通常STORY全クリア後のみ表示される高難度周回）の切り替え
+    document.querySelectorAll('#story-extra-row .diff-btn').forEach(b => {
+        b.addEventListener('click', () => {
+            state.storyExtra = b.dataset.storyExtra === 'true';
+            document.querySelectorAll('#story-extra-row .diff-btn').forEach(x => x.classList.toggle('active', x === b));
+            toast(state.storyExtra
+                ? 'STORY EXTRA — 固定ウェーブがすべて強化された高難度版'
+                : '通常のSTORY');
         });
     });
 
