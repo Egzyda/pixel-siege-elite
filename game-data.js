@@ -76,26 +76,26 @@ const UNIT_DEFS = {
     giant: {
         name:'ゴーレム', cost:65, hp:1300, dmg:58, range:36, speed:0.34, rate:115,
         type:'tank', mass:5.0, kb:30, sprite:SPRITES.giant, pal:PALETTES.giant,
-        comment:'圧倒的な耐久と引き換えに火力は控えめな純粋な盾役。HP/コスト効率はナイトより明確に高い'
+        comment:'圧倒的な耐久と引き換えに火力は控えめな純粋な盾役'
     },
 
     // --- 敵ユニット（AI 対戦モードでは AI も購入する） ---
     goblin: {
         name:'ゴブリン', cost:10, hp:45, dmg:11, range:20, speed:0.95, rate:32,
         type:'melee', mass:0.5, kb:0, sprite:SPRITES.goblin, pal:PALETTES.goblin,
-        comment:'最安・最速の物量ユニット。数を並べた時の総火力はナイトを上回るが打たれ弱く、範囲攻撃に弱い'
+        comment:'最安・最速の物量ユニット。数を並べて押し込む物量戦が持ち味だが打たれ弱く、範囲攻撃に弱い'
     },
     orc: {
         name:'オーク', cost:36, hp:300, dmg:14, range:28, speed:0.48, rate:72,
         type:'melee', mass:2.0, kb:2, sprite:SPRITES.orc, pal:PALETTES.orc,
         meleeSplash:36, meleeSplashRate:0.55,
-        comment:'薙ぎ払いで周囲も巻き込む近接アタッカー。ゴーレムより打たれ弱い'
+        comment:'薙ぎ払いで周囲も巻き込む近接アタッカー。打たれ弱く長くは耐えられない'
     },
     skeleton: {
         name:'スケルトン', cost:22, hp:36, dmg:9, range:185, speed:0.34, rate:80,
         type:'ranged', mass:0.4, kb:0, sprite:SPRITES.skeleton, pal:PALETTES.skeleton,
         slowDuration: SKELETON_SLOW_DURATION,
-        comment:'アーチャーを凌ぐ超長射程の狙撃役。命中した相手を鈍足にする呪いの矢を放つ。打たれ弱く動きも遅い'
+        comment:'超長射程の狙撃役。命中した相手を鈍足にする呪いの矢を放つ。打たれ弱く動きも遅い'
     },
 
     // --- 戦術で召喚される特殊ユニット（ショップには並ばない） ---
@@ -141,12 +141,16 @@ const UNIT_DEFS = {
         // ストーンが生み出す増援。ショップには並ばず購入不可(cost:0)
         name:'ミニストーン', cost:0, hp:45, dmg:11, range:20, speed:0.70, rate:32,
         type:'melee', mass:0.6, kb:0, scale:1.1, sprite:SPRITES.giant, pal:PALETTES.boss_golem,
-        comment:'ストーンが生み出す小さな増援。ゴブリンと同程度のステータス'
+        comment:'ストーンが生み出す小さな増援'
     },
     graveLord: {
-        name:'ロード', cost:70, hp:380, dmg:42, range:30, speed:0.40, rate:65,
-        type:'melee', mass:1.6, kb:6, lifesteal:0.30, scale:2.3, sprite:SPRITES.boss_skeleton.idle, pal:PALETTES.boss_necro,
-        comment:'近接で殴るたびに与えたダメージの30%を自己回復する死霊騎士'
+        // リッチ(boss_skeleton形状)と見分けづらかったため、杖を持つ形状(wizardの
+        // スプライトを流用)に変更。移動せず短射程の弱い攻撃しかできない代わりに、
+        // 倒れた味方を蘇生する後方支援役に再設計した
+        name:'ロード', cost:70, hp:380, dmg:18, range:70, speed:0, rate:75,
+        type:'ranged', mass:1.6, kb:0, scale:2.1, sprite:SPRITES.wizard, pal:PALETTES.boss_necro,
+        reviveAlly:true, reviveInterval:600,
+        comment:'その場から動かず短射程の弱い攻撃しかできない代わりに、倒れた味方がいれば蘇生する死霊術師。倒れた味方がいない間は何もしない。初回は即座に発動し、以降は一定のクールタイムを置く'
     },
     sentry: {
         // 「値段が高いだけで雑魚も倒せない」との声を受けて強化。

@@ -32,6 +32,7 @@ const state = {
 
     units: [],                // バトル中のユニット実体
     projs: [], fx: [], popups: [],
+    playerCorpses: [],        // 戦死した味方の種類キュー（ロードの蘇生用）
     boss: null,
     playerBase: null,
     enemyBase: null,
@@ -347,6 +348,7 @@ class Unit {
         this.beamDmgAccum = 0;              // 継続照射のダメージ表示をまとめるための積算
         this.beamTickTimer = 0;
         this.summonTimer = 0;               // 定期召喚(ストーンなど)の経過フレーム
+        this.reviveCd = 0;                  // 蘇生(ロードなど)のクールタイム。0なら発動可能
     }
 
     // 攻撃対象を探す
@@ -407,6 +409,21 @@ class Unit {
                         clamp(this.y + Math.sin(a) * 30 + 16, 24, state.h - 14)));
                 }
                 spawnPop(this.x, this.y - 40, '+' + n, '#a3e635');
+            }
+        }
+
+        // 蘇生（ロードなど）。倒れた味方がいなければ何もしない。
+        // reviveCd は初期値0なので、味方が倒れた直後にクールタイム待ちでなければ
+        // 即座に発動する。一度発動すると reviveInterval の間は再発動しない
+        if(this.def.reviveAlly && this.isP) {
+            if(this.reviveCd > 0) this.reviveCd -= dt;
+            if(this.reviveCd <= 0 && state.playerCorpses.length > 0) {
+                const key = state.playerCorpses.shift();
+                state.units.push(new Unit(key, true,
+                    clamp(this.x + randRange(-30, 30), 20, state.w - 20),
+                    clamp(this.y - 20, 24, state.h - 14)));
+                this.reviveCd = this.def.reviveInterval;
+                spawnPop(this.x, this.y - 40, 'REVIVE!', '#a855f7');
             }
         }
 
@@ -631,6 +648,10 @@ function onUnitDeath(u) {
             state.boss.corpses.push(u.key);
             if(state.boss.corpses.length > 12) state.boss.corpses.shift();
         }
+    } else {
+        // ロード用に味方の死体を記録（蘇生に使う）
+        state.playerCorpses.push(u.key);
+        if(state.playerCorpses.length > 12) state.playerCorpses.shift();
     }
     for(let i = 0; i < 6; i++) {
         state.fx.push({
@@ -996,6 +1017,7 @@ function fireTactic(key) {
 // 編成データからバトル用ユニットを生成する
 function deployRoster() {
     state.units = [];
+    state.playerCorpses = []; // ロードの蘇生用。バトル開始のたびに空にする
     // 準備フェーズとバトルは常に同じfieldScaleのワールド座標を使うため、
     // 編成の座標(r.x, r.y)をそのまま使ってよい
     state.roster.forEach(r => {
@@ -2323,19 +2345,10 @@ function openCodex() {
     const list = document.getElementById('codex-list');
     list.innerHTML = '';
 
-    const groups = [
-        { label: '基本ユニット', keys: SHOP_UNITS },
-        { label: 'エリートユニット', keys: ELITE_UNITS },
-        { label: '戦術・ユニットが召喚', keys: ['angel', 'miniStone'] }
-    ];
-    groups.forEach(g => {
-        const head = document.createElement('div');
-        head.className = 'codex-group';
-        head.textContent = g.label;
-        list.appendChild(head);
-        g.keys.forEach(key => list.appendChild(buildUnitCard(key,
-            { showCost: true, previewMode: true, previewLevel: codexPreviewLevels[key] || 0 })));
-    });
+    // カテゴリ分けはせず、全ユニットを同列の1グループとして並べる
+    const keys = [...SHOP_UNITS, ...ELITE_UNITS, 'angel', 'miniStone'];
+    keys.forEach(key => list.appendChild(buildUnitCard(key,
+        { showCost: true, previewMode: true, previewLevel: codexPreviewLevels[key] || 0 })));
     list.scrollTop = scrollTop;
 
     document.getElementById('codex-sheet').classList.add('show');
@@ -3323,6 +3336,13 @@ function resize() {
     if(state.scene === 'prep') clampRosters();
 }
 
+// STORYには難易度(EASY/NORMAL/HARD)が影響しないため、STORY選択中は
+// 難易度セレクタごと非表示にする（SURVIVAL/VERSUSでは表示する）
+function syncDiffSectionVisibility() {
+    document.getElementById('diff-section').style.display =
+        state.selectedMode === 'story' ? 'none' : '';
+}
+
 function bindEvents() {
     window.addEventListener('resize', resize);
     window.addEventListener('orientationchange', () => setTimeout(resize, 120));
@@ -3342,6 +3362,7 @@ function bindEvents() {
         document.querySelectorAll('.menu-btn[data-mode]').forEach(x => {
             x.classList.toggle('selected', x.dataset.mode === state.selectedMode);
         });
+        syncDiffSectionVisibility();
         showScreen('screen-mode');
     });
     document.getElementById('btn-continue').addEventListener('click', loadGame);
@@ -3365,6 +3386,7 @@ function bindEvents() {
         b.addEventListener('click', () => {
             state.selectedMode = b.dataset.mode;
             document.querySelectorAll('.menu-btn[data-mode]').forEach(x => x.classList.toggle('selected', x === b));
+            syncDiffSectionVisibility();
         });
     });
     document.getElementById('btn-mode-start').addEventListener('click', () => startNewGame(state.selectedMode || 'story'));
