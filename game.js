@@ -1170,12 +1170,18 @@ function buildAiRoster() {
     }
 
     const preset = AI_PRESETS[state.difficulty];
-    // 序盤にいきなり差がつかないよう、予算補正は数ラウンドかけて効いてくる。
-    // ただしHARDは「本気で対策して勝ちにくる」難易度のため、この緩和は適用せず
+    // budgetMult(難易度ごとの資金補正)はSURVIVAL限定のレバー。
+    // VERSUSはプレイヤーと全く同じ条件を保つ必要があるため、資金の水増し/カットは
+    // 一切行わず、収入は常にbudgetForRound()そのまま(=プレイヤーと同額)にする。
+    // 序盤にいきなり差がつかないよう、予算補正は数ラウンドかけて効いてくるが、
+    // HARDは「本気で対策して勝ちにくる」難易度のため、この緩和は適用せず
     // 初回ラウンドから全力で来る
-    const ramp = state.difficulty === 'hard'
-        ? preset.budgetMult
-        : 1 + (preset.budgetMult - 1) * Math.min(1, state.round / 3);
+    let ramp = 1;
+    if(state.mode === 'survival') {
+        ramp = state.difficulty === 'hard'
+            ? preset.budgetMult
+            : 1 + (preset.budgetMult - 1) * Math.min(1, state.round / 3);
+    }
     const roundIncome = Math.round(budgetForRound(state.round) * ramp);
     state.aiGold += roundIncome;
 
