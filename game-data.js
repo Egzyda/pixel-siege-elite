@@ -193,20 +193,11 @@ function maxUnitsFor(mode) {
 const BUDGETS = [80, 110, 140, 180, 220, 270, 320];
 const EXTRA_BUDGET_STEP = 60;
 
-// STORY EXTRA（後述）用に予算を絞ったテーブル。STORY以外のモードでは使わない。
-// BUDGETSが全て10単位の切りの良い数字なので、EXTRAも10単位に丸めて揃える
-// （単純に0.9倍しただけだと72G・99G等の半端な数字になり見栄えが悪かったため）
-const STORY_EXTRA_BUDGET_MULT = 0.9;
-const BUDGETS_EXTRA = BUDGETS.map(b => Math.round(b * STORY_EXTRA_BUDGET_MULT / 10) * 10);
-const EXTRA_BUDGET_STEP_EXTRA = Math.round(EXTRA_BUDGET_STEP * STORY_EXTRA_BUDGET_MULT / 10) * 10;
-
+// STORY EXTRAも予算はSTORY通常と共通（プレイヤーの自由度を削る形の難易度調整は
+// しない方針。難易度は敵数・ボス性能の強化のみで担う）
 function budgetForRound(round) {
-    // STORY EXTRA中はSTORYの予算だけ絞る（SURVIVAL/VERSUSやSTORY通常には影響しない）
-    const extra = state.mode === 'story' && state.storyExtra;
-    const table = extra ? BUDGETS_EXTRA : BUDGETS;
-    const step = extra ? EXTRA_BUDGET_STEP_EXTRA : EXTRA_BUDGET_STEP;
-    if(round <= table.length) return table[round - 1];
-    return table[table.length - 1] + (round - table.length) * step;
+    if(round <= BUDGETS.length) return BUDGETS[round - 1];
+    return BUDGETS[BUDGETS.length - 1] + (round - BUDGETS.length) * EXTRA_BUDGET_STEP;
 }
 
 // ============================================================
