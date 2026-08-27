@@ -1549,7 +1549,9 @@ function showResultScreen() {
 
     if(showNext) rows.push(['次の予算', `${state.gold}G`]);
     if(r.tally.playerLost > 0) {
-        rows.push(['戦死したユニット', `${r.tally.playerLost} 体（編成には残ります）`]);
+        // 「編成には残ります」は次ラウンドがある場合のみ正しい表記。
+        // 敗北時やストーリー全クリア時(showNext=false)はそのまま継続しないため付けない
+        rows.push(['戦死したユニット', `${r.tally.playerLost} 体` + (showNext ? '（編成には残ります）' : '')]);
     }
 
     stats.innerHTML = rows.map(x =>
@@ -1937,9 +1939,13 @@ function buildUnitCard(key, opts) {
     const splash = splashRadius(def);
 
     // レベルアップ済みなら、表示するステータスにもその分を反映する（上限あり）。
-    // 敵側はVERSUSでAIが投資した分を反映する（それ以外のモードは常に0）
-    const lvl = o.enemy ? aiUnitLevel(key) : unitLevel(key);
-    const lvlMult = o.enemy ? aiUnitLevelMult(key) : unitLevelMult(key);
+    // 敵側はVERSUSでAIが投資した分を反映する（それ以外のモードは常に0）。
+    // 図鑑のプレビューモードでは実際の所持レベルではなく、閲覧用に
+    // その場で上下できる仮のレベル(previewLevel)を使う
+    const lvl = o.previewLevel !== undefined ? o.previewLevel : (o.enemy ? aiUnitLevel(key) : unitLevel(key));
+    const lvlMult = o.previewLevel !== undefined
+        ? Math.min(UNIT_LEVEL_MULT_CAP, Math.pow(1 + UNIT_LEVEL_STAT_GAIN, o.previewLevel))
+        : (o.enemy ? aiUnitLevelMult(key) : unitLevelMult(key));
     const dispHp = Math.round(def.hp * lvlMult);
     const dispDmg = Math.round(Math.abs(def.dmg) * lvlMult) * (def.dmg < 0 ? -1 : 1);
 
@@ -1996,7 +2002,11 @@ function buildUnitCard(key, opts) {
     if(o.canLevelUp) {
         const lvup = document.createElement('div');
         lvup.className = 'card-lvup';
-        if(lvlMult >= effectiveUnitLevelCap(key)) {
+        if(!o.owned) {
+            // 所持数0だとレベルアップ価格の計算基準が定まらず、先に購入した
+            // 場合より割高になる抜け道があったため、配置するまではロックする
+            lvup.innerHTML = `<span class="lvup-maxed">配置すると強化できます</span>`;
+        } else if(lvlMult >= effectiveUnitLevelCap(key)) {
             lvup.innerHTML = `<span class="lvup-maxed">★ 最大まで強化済み</span>`;
         } else {
             lvup.innerHTML = `
@@ -2007,6 +2017,23 @@ function buildUnitCard(key, opts) {
                 buyUnitLevel(key);
             });
         }
+        card.appendChild(lvup);
+    } else if(o.previewMode) {
+        // 図鑑用のレベルプレビュー。実際のゴールドや所持数とは無関係に、
+        // ステータスが何倍まで伸びるかその場で確認できるだけの機能
+        const lvup = document.createElement('div');
+        lvup.className = 'card-lvup';
+        const atCap = lvlMult >= UNIT_LEVEL_MULT_CAP - 1e-9;
+        lvup.innerHTML = `
+            <button class="lvup-btn lvup-step" type="button" data-dir="-1" ${lvl <= 0 ? 'disabled' : ''}>▼ Lv</button>
+            <span class="lvup-cost">${atCap ? '上限' : ''}</span>
+            <button class="lvup-btn lvup-step" type="button" data-dir="1" ${atCap ? 'disabled' : ''}>▲ Lv</button>`;
+        lvup.querySelectorAll('.lvup-step').forEach(btn => {
+            btn.addEventListener('click', e => {
+                e.stopPropagation();
+                adjustCodexPreviewLevel(key, Number(btn.dataset.dir));
+            });
+        });
         card.appendChild(lvup);
     }
 
@@ -2074,6 +2101,12 @@ function buildBossCard() {
 
 // ユニット種別レベルアップの購入
 function buyUnitLevel(key) {
+    // 1体も配置していない種類は先にレベルを上げられないようにする。
+    // これを許すと「所持数0のうちに安くレベルを上げてから量産する」ことで
+    // 先に購入してからレベルを上げる場合より安上がりになってしまっていた
+    // （所持数0のレベルアップ価格は所持数1相当で計算されるが、後から
+    // まとめ買いする分にはその「1体ぶんの前払い」が反映されないため）
+    if(unitOwnedCount(key) === 0) { toast('先にユニットを配置してください'); return; }
     if(unitLevelMult(key) >= effectiveUnitLevelCap(key)) { toast('これ以上は強化できません'); return; }
     const lvl = unitLevel(key);
     const cost = unitLevelCost(key, lvl, unitOwnedCount(key));
@@ -2281,7 +2314,12 @@ function unitAtPoint(x, y) {
 // ------------------------------------------------------------
 // ユニット図鑑（タイトル画面から開く一覧）
 // ------------------------------------------------------------
+// 図鑑で「レベルを上げるとどれだけ伸びるか」をその場で確認できる、
+// 実際のゴールド・所持数とは無関係な閲覧専用のプレビューレベル
+let codexPreviewLevels = {};
+
 function openCodex() {
+    const scrollTop = document.getElementById('codex-list').scrollTop;
     const list = document.getElementById('codex-list');
     list.innerHTML = '';
 
@@ -2295,14 +2333,25 @@ function openCodex() {
         head.className = 'codex-group';
         head.textContent = g.label;
         list.appendChild(head);
-        g.keys.forEach(key => list.appendChild(buildUnitCard(key, { showCost: true })));
+        g.keys.forEach(key => list.appendChild(buildUnitCard(key,
+            { showCost: true, previewMode: true, previewLevel: codexPreviewLevels[key] || 0 })));
     });
+    list.scrollTop = scrollTop;
 
     document.getElementById('codex-sheet').classList.add('show');
 }
 
+// 図鑑のプレビューレベルを+1/-1する（実際のゴールドや所持数は一切変更しない）
+function adjustCodexPreviewLevel(key, dir) {
+    const capLevel = Math.ceil(Math.log(UNIT_LEVEL_MULT_CAP) / Math.log(1 + UNIT_LEVEL_STAT_GAIN));
+    const cur = codexPreviewLevels[key] || 0;
+    codexPreviewLevels[key] = clamp(cur + dir, 0, capLevel);
+    openCodex();
+}
+
 function closeCodex() {
     document.getElementById('codex-sheet').classList.remove('show');
+    codexPreviewLevels = {}; // 次に開いたときは毎回Lv.1からのプレビューに戻す
 }
 
 // ------------------------------------------------------------
