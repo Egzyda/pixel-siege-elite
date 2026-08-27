@@ -151,7 +151,7 @@ const UNIT_DEFS = {
         name:'ロード', cost:70, hp:380, dmg:18, range:70, speed:0, rate:75,
         type:'ranged', mass:1.6, kb:0, scale:2.1, sprite:SPRITES.wizard, pal:PALETTES.boss_necro,
         reviveAlly:true, reviveInterval:600,
-        comment:'その場から動かず短射程の弱い攻撃しかできない代わりに、倒れた味方がいれば蘇生する死霊術師。倒れた味方がいない間は何もしない。初回は即座に発動し、以降は一定のクールタイムを置く'
+        comment:'その場から動かず短射程の弱い攻撃しかできない代わりに、倒れた味方がいれば蘇生する死霊術師。倒れた味方がいない間は何もしない。初回は即座に発動し、以降は10秒のクールタイムを置く'
     },
     sentry: {
         // 「値段が高いだけで雑魚も倒せない」との声を受けて強化。
