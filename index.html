@@ -430,7 +430,10 @@ body {
 /* 範囲攻撃を持つユニットは一目で分かるよう色を変える */
 .card-type.splash { background: var(--accent); }
 .card-own { font-size: 9px; font-weight: 800; color: var(--green); white-space: nowrap; flex: 0 0 auto; }
-.card-cost { font-size: 13px; font-weight: 900; color: var(--gold); white-space: nowrap; flex: 0 0 auto; }
+/* min-width で幅を固定し、レベルアップ等で2桁→3桁に増えても.card-idの
+   横幅が変わらないようにする（変わると.card-sub内のバッジの折り返し位置が
+   ずれ、×N表示だけ一段下がるカードが出てしまう） */
+.card-cost { font-size: 13px; font-weight: 900; color: var(--gold); white-space: nowrap; flex: 0 0 auto; min-width: 42px; text-align: right; }
 .card-stats {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -818,14 +821,6 @@ body {
     gap: 7px;
     padding: 2px 2px 8px;
 }
-.codex-group {
-    grid-column: 1 / -1;
-    font-size: 9px;
-    letter-spacing: 1.5px;
-    color: var(--muted);
-    font-weight: 800;
-    padding: 6px 2px 0;
-}
 #codex-list .shop-card { cursor: default; }
 #codex-list .shop-card:active { transform: none; }
 </style>
@@ -1036,11 +1031,13 @@ body {
             <div class="menu-badge" id="badge-versus"></div>
         </button>
 
-        <div class="section-label" style="margin-top:8px">DIFFICULTY（SURVIVAL / VERSUS）</div>
-        <div class="diff-row" id="diff-row">
-            <button class="diff-btn" data-diff="easy">EASY<small id="diff-mark-easy"></small></button>
-            <button class="diff-btn active" data-diff="normal">NORMAL<small id="diff-mark-normal"></small></button>
-            <button class="diff-btn" data-diff="hard">HARD<small id="diff-mark-hard"></small></button>
+        <div id="diff-section">
+            <div class="section-label" style="margin-top:8px">DIFFICULTY（SURVIVAL / VERSUS）</div>
+            <div class="diff-row" id="diff-row">
+                <button class="diff-btn" data-diff="easy">EASY<small id="diff-mark-easy"></small></button>
+                <button class="diff-btn active" data-diff="normal">NORMAL<small id="diff-mark-normal"></small></button>
+                <button class="diff-btn" data-diff="hard">HARD<small id="diff-mark-hard"></small></button>
+            </div>
         </div>
         <button class="menu-btn big fill" id="btn-mode-start">START</button>
         <button class="menu-btn plain" id="btn-mode-back">← タイトルへ戻る</button>
