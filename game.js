@@ -1214,6 +1214,7 @@ function buildAiRoster() {
     if(state.mode === 'survival') {
         state.aiRoster.forEach(r => { state.aiGold += UNIT_DEFS[r.key].cost; });
         state.aiRoster = [];
+        state.aiUnitLevels = {}; // 毎ラウンド資金全額で組み直す方式に合わせ、個別レベル投資もリセットする
     }
 
     const preset = AI_PRESETS[state.difficulty];
@@ -1232,22 +1233,15 @@ function buildAiRoster() {
     }
     state.aiGold += roundIncome;
 
-    // VERSUS限定: プレイヤーと同じユニット個別レベルアップの仕組みをAIにも
-    // 使わせる。対象は現在の編成で最も多い（＝主力の）種類とし、毎ラウンドの
-    // 収入の一部を注ぎ込む。1ラウンド目はまだ編成が無いため対象なし
-    if(state.mode === 'versus' && preset.levelInvestRatio > 0) {
-        let levelBudget = Math.round(roundIncome * preset.levelInvestRatio);
-        const target = pickAiLevelTarget();
-        if(target) {
-            while(levelBudget > 0 && state.aiGold > 0 && aiUnitLevelMult(target) < UNIT_LEVEL_MULT_CAP) {
-                const n = state.aiRoster.filter(r => r.key === target).length;
-                const cost = unitLevelCost(target, aiUnitLevel(target), n);
-                if(cost > levelBudget || cost > state.aiGold) break;
-                state.aiGold -= cost;
-                levelBudget -= cost;
-                state.aiUnitLevels[target] = aiUnitLevel(target) + 1;
-            }
-        }
+    // VERSUS/SURVIVAL共通: プレイヤーと同じユニット個別レベルアップの仕組みを
+    // AIにも使わせる。毎ラウンドの収入の一部を先に取り分けておき、購入(後述)が
+    // ひと段落してから、その時点の編成で最も多い(=主力の)種類に注ぎ込む。
+    // 対象選定を購入の後に回すことで、まだ編成が無い1ラウンド目や、SURVIVALの
+    // 「毎ラウンド資金全額で組み直す」直後でも正しく主力を選べるようにしている
+    let levelBudget = 0;
+    if((state.mode === 'versus' || state.mode === 'survival') && preset.levelInvestRatio > 0) {
+        levelBudget = Math.round(roundIncome * preset.levelInvestRatio);
+        state.aiGold -= levelBudget; // 購入ループに食われないよう一時的に取り分けておく
     }
 
     // 2 ラウンド目以降は直前のプレイヤー編成を見て刺さるユニットを選ぶ
@@ -1278,6 +1272,22 @@ function buildAiRoster() {
     }
 
     placeAiRoster(purchased, comp);
+
+    // 取り分けておいた予算を、購入後の編成の中で最も多い(=主力の)種類に注ぎ込む。
+    // 使いきれなかった分は通常予算へ戻す
+    if(levelBudget > 0) {
+        const target = pickAiLevelTarget();
+        if(target) {
+            while(levelBudget > 0 && aiUnitLevelMult(target) < UNIT_LEVEL_MULT_CAP) {
+                const n = state.aiRoster.filter(r => r.key === target).length;
+                const cost = unitLevelCost(target, aiUnitLevel(target), n);
+                if(cost > levelBudget) break;
+                levelBudget -= cost;
+                state.aiUnitLevels[target] = aiUnitLevel(target) + 1;
+            }
+        }
+        state.aiGold += levelBudget;
+    }
 
     // 配置上限に達して予算が余った場合は編成強化に回す（プレイヤーの「強化」に相当）
     const powerMax = AI_POWER_MAX[state.mode] || 2.0;
