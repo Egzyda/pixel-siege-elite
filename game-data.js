@@ -88,7 +88,7 @@ const UNIT_DEFS = {
     orc: {
         name:'オーク', cost:36, hp:300, dmg:14, range:28, speed:0.48, rate:72,
         type:'melee', mass:2.0, kb:2, sprite:SPRITES.orc, pal:PALETTES.orc,
-        meleeSplash:36, meleeSplashRate:0.55,
+        meleeSplash:46, meleeSplashRate:0.55,
         comment:'薙ぎ払いで周囲も巻き込む近接アタッカー。打たれ弱く長くは耐えられない'
     },
     skeleton: {
@@ -109,14 +109,23 @@ const UNIT_DEFS = {
     // ストーリーのボスと同じスプライトを縮小して流用するが、能力は通常ユニットと
     // 同水準に収め、1体だけ個性の際立つ特徴を持たせている。
     warlord: {
-        name:'ウォーロード', cost:70, hp:600, dmg:45, range:30, speed:0.42, rate:70,
-        type:'melee', mass:3.0, kb:14, scale:2.4, sprite:SPRITES.boss_orc.idle, pal:PALETTES.boss_goblin,
-        comment:'重量級の指揮官。一撃は重く、敵を大きく突き飛ばす'
+        // 攻撃間隔を大幅に伸ばす代わりに一撃を極端に重くした、溜め型の重量級。
+        // knockbackCapで通常のKNOCKBACK_CAPより大きく吹き飛ばせるようにしてある
+        name:'ウォーロード', cost:85, hp:600, dmg:260, range:30, speed:0.42, rate:180,
+        type:'melee', mass:3.0, kb:28, knockbackCap:12, chargeAttack:true,
+        scale:2.4, sprite:SPRITES.boss_orc.idle, pal:PALETTES.boss_goblin,
+        comment:'長い溜めの代わりに一撃が非常に重く、同格の敵なら一撃で沈める重量級の指揮官。攻撃前に力を溜める予備動作があり、ノックバックも大きい'
     },
     lich: {
-        name:'リッチ', cost:65, hp:180, dmg:26, range:160, speed:0.36, rate:60,
-        type:'ranged', mass:0.9, kb:0, lifesteal:0.35, scale:2.3, sprite:SPRITES.boss_skeleton.idle, pal:PALETTES.boss_assassin,
-        comment:'ドレイン: 与えたダメージの35%を自分のHPに変換する死霊術師'
+        // ドレイン(自己回復)を廃止し、周囲の味方の攻撃力を底上げする支援型に再設計。
+        // 攻撃速度ではなく攻撃力を上げる方式にしたのは、範囲攻撃/薙ぎ払いを持つ
+        // ユニットで攻撃速度バフを重ねると手数が増えた分だけ範囲ダメージも
+        // 倍増して暴れやすいため（攻撃力バフなら単純な倍率で済み調整しやすい）。
+        // auraRadius内では何体重なっても倍率は重複しない(Unit.update()参照)
+        name:'リッチ', cost:75, hp:180, dmg:14, range:160, speed:0.36, rate:70,
+        type:'ranged', mass:0.9, kb:0, auraRadius:110, auraBuff:1.25,
+        scale:2.3, sprite:SPRITES.boss_skeleton.idle, pal:PALETTES.boss_assassin,
+        comment:'周囲の味方の攻撃力を25%高める支援型の死霊術師(重複なし)。自身の遠距離攻撃は弱め'
     },
     drake: {
         name:'ドレイク', cost:85, hp:340, dmg:30, range:120, speed:0.44, rate:75,
