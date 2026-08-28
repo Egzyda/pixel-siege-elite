@@ -92,6 +92,10 @@ const KNOCKBACK_CAP = 4;
 // 現れても目移りせず狙い続ける（タンクやノックバックで足止めする意味を保つため）
 const TARGET_LOCK_RANGE = 210;
 
+// 溜め攻撃（ウォーロードなど）の予備動作演出。攻撃までの残りがこのフレーム数
+// 以下になったら、力を溜めているのが見て分かるよう火花を発生させ始める
+const CHARGE_TELL_FRAMES = 45;
+
 // 継続照射(セントリーなど)のダメージ表示間隔（フレーム）。
 // 毎フレーム細かくtakeDmgすると「0」ばかりのポップアップが大量に出て
 // HPバーが見えなくなるため、この間隔でまとめて反映・表示する
@@ -352,6 +356,7 @@ class Unit {
         this.summonTimer = 0;               // 定期召喚(ストーンなど)の経過フレーム
         this.reviveCd = 0;                  // 蘇生(ロードなど)のクールタイム。0なら発動可能
         this.invisible = !!this.def.stealthUntilEngage; // 接敵するまで敵から狙われない透明化(インプなど)
+        this.auraMult = 1;                  // 攻撃力オーラ(リッチなど)による倍率。毎フレームupdate()で再計算
     }
 
     // 攻撃対象を探す
@@ -431,6 +436,27 @@ class Unit {
                 this.reviveCd = this.def.reviveInterval;
                 spawnPop(this.x, this.y - 40, 'REVIVE!', '#a855f7');
             }
+        }
+
+        // 溜め演出（ウォーロードなど）。攻撃直前の一定フレームだけ、力を
+        // 溜めているのが見た目で分かるように周囲へ火花を発生させる
+        if(this.def.chargeAttack && this.cd > 0 && this.cd <= CHARGE_TELL_FRAMES) {
+            const a = Math.random() * Math.PI * 2;
+            const r = 10 + Math.random() * 8;
+            state.fx.push({
+                x: this.x + Math.cos(a) * r, y: this.y - 16 + Math.sin(a) * r * 0.6,
+                vx: -Math.cos(a) * 1.2, vy: -Math.sin(a) * 1.2 - 0.3, life: 16,
+                color: this.isP ? '#fbbf24' : '#f87171'
+            });
+        }
+
+        // 攻撃力オーラ（リッチなど）。自陣営でdef.auraRadiusを持つユニットの
+        // 範囲内に入っていればauraBuffの倍率を受ける。複数体の範囲に同時に
+        // 入っても最大値を採用するだけで重複(掛け算)はしない
+        this.auraMult = 1;
+        for(const u of state.units) {
+            if(u.isP !== this.isP || !u.def.auraRadius || u.hp <= 0) continue;
+            if(dist(u, this) <= u.def.auraRadius) this.auraMult = Math.max(this.auraMult, u.def.auraBuff);
         }
 
         // ノックバックの慣性
@@ -548,26 +574,32 @@ class Unit {
             return;
         }
 
+        // 攻撃力オーラ（リッチなど）による倍率。回復は対象外のためここで適用する
+        const dmg = this.dmg * (this.auraMult || 1);
+
         if(this.def.type === 'ranged' || this.def.type === 'aoe') {
             state.projs.push({
                 x: this.x, y: this.y - 14,
-                target: t, dmg: this.dmg, def: this.def,
+                target: t, dmg: dmg, def: this.def,
                 isP: this.isP, owner: this, active: true
             });
         } else {
-            t.takeDmg(this.dmg, this);
+            t.takeDmg(dmg, this);
             // ノックバック（「壁の外まで吹き飛ぶ」ことがないよう、
-            // 一撃あたりの勢いに上限を設けて「軽く後ずさる」程度に抑える）
+            // 一撃あたりの勢いに上限を設けて「軽く後ずさる」程度に抑える。
+            // ウォーロードなどdef.knockbackCapを持つユニットは、この上限自体を
+            // 通常より高くすることで「もっと吹き飛ばす」個性を表現する）
             if(t.vx !== undefined) {
                 const a = Math.atan2(t.y - this.y, t.x - this.x);
-                const k = Math.min(KNOCKBACK_CAP, (this.def.kb / (t.def && t.def.mass ? t.def.mass : 2)) * KNOCKBACK_MULT);
+                const cap = this.def.knockbackCap || KNOCKBACK_CAP;
+                const k = Math.min(cap, (this.def.kb / (t.def && t.def.mass ? t.def.mass : 2)) * KNOCKBACK_MULT);
                 t.vx += Math.cos(a) * k;
                 t.vy += Math.sin(a) * k;
             }
 
             // 薙ぎ払い（オークなど）: 主目標の周囲にいる敵にも波及ダメージ
             if(this.def.meleeSplash) {
-                const splashDmg = this.dmg * (this.def.meleeSplashRate || 0.6);
+                const splashDmg = dmg * (this.def.meleeSplashRate || 0.6);
                 state.units.forEach(u => {
                     if(u === t || u.isP === this.isP || u.hp <= 0) return;
                     if(dist(u, t) <= this.def.meleeSplash) u.takeDmg(splashDmg, this);
@@ -609,6 +641,20 @@ class Unit {
 
     draw(ctx) {
         const bounce = Math.abs(Math.sin(this.anim)) * 2.5;
+
+        // 攻撃力オーラ（リッチなど）の効果範囲を常時円で表示する（発動時だけでなく常時）
+        if(this.def.auraRadius) {
+            ctx.save();
+            const auraColor = this.isP ? '52,211,153' : '248,113,113';
+            ctx.fillStyle = `rgba(${auraColor},0.12)`;
+            ctx.strokeStyle = `rgba(${auraColor},0.5)`;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.def.auraRadius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+        }
 
         // 透明化中(インプなど)は半透明にして、観戦側からは狙われていない状態と分かるようにする
         if(this.invisible) ctx.globalAlpha = 0.4;
@@ -2061,7 +2107,13 @@ function buildUnitCard(key, opts) {
     if(o.showCost) {
         const cost = document.createElement('div');
         cost.className = 'card-cost';
-        cost.textContent = unitBuyCost(key) + 'G';
+        // 図鑑のプレビューモードでは、実際の所持レベル(state.unitLevels。
+        // タイトル画面なので前回セーブの値が残っている)ではなく、
+        // プレビューレベルに応じた価格を表示する
+        const dispCost = o.previewLevel !== undefined
+            ? Math.round(def.cost * lvlMult)
+            : unitBuyCost(key);
+        cost.textContent = dispCost + 'G';
         head.appendChild(cost);
     }
 
