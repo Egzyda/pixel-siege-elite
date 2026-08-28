@@ -1028,13 +1028,6 @@ body {
             <div class="menu-desc">全10ステージ。配置された敵とボスを撃破して進む1人用モード。</div>
             <div class="menu-badge" id="badge-story"></div>
         </button>
-        <div id="story-extra-section" style="display:none">
-            <div class="section-label" style="margin-top:2px">STORY EXTRA（クリア後に解禁）</div>
-            <div class="diff-row" id="story-extra-row">
-                <button class="diff-btn active" data-story-extra="false">通常</button>
-                <button class="diff-btn" data-story-extra="true">EXTRA<small id="story-extra-mark"></small></button>
-            </div>
-        </div>
         <button class="menu-btn" id="btn-mode-survival" data-mode="survival">
             <div class="menu-name">SURVIVAL</div>
             <div class="menu-desc">全10ステージの体力制対戦。相手は毎回こちらに合わせて組み直してくる。最終ステージだけは勝たないとクリアにならない。</div>
@@ -1046,8 +1039,17 @@ body {
             <div class="menu-badge" id="badge-versus"></div>
         </button>
 
+        <!-- STORYの「EXTRA切替」とSURVIVAL/VERSUSの「難易度選択」は、モードによって
+             レイアウトの高さが変わってガタつかないよう、同じ位置(カード群の直下)に揃えて表示する -->
+        <div id="story-extra-section" style="display:none">
+            <div class="section-label">STORY EXTRA（クリア後に解禁）</div>
+            <div class="diff-row" id="story-extra-row">
+                <button class="diff-btn active" data-story-extra="false">通常</button>
+                <button class="diff-btn" data-story-extra="true">EXTRA<small id="story-extra-mark"></small></button>
+            </div>
+        </div>
         <div id="diff-section">
-            <div class="section-label" style="margin-top:8px">DIFFICULTY（SURVIVAL / VERSUS）</div>
+            <div class="section-label">DIFFICULTY（SURVIVAL / VERSUS）</div>
             <div class="diff-row" id="diff-row">
                 <button class="diff-btn" data-diff="easy">EASY<small id="diff-mark-easy"></small></button>
                 <button class="diff-btn active" data-diff="normal">NORMAL<small id="diff-mark-normal"></small></button>
