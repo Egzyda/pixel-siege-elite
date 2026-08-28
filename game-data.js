@@ -465,6 +465,49 @@ function unitLevelCost(key, level, count) {
 }
 
 // ============================================================
+// SURVIVAL（クリア制・全10ステージ）
+// メカベラム風に「毎回相手が盤面を組み直してくる」対戦形式。VERSUSと
+// 同じ体力制を使い、ラウンドに負けても体力が残っていれば続行できるが、
+// 最終(10)ステージだけは実際に勝たないとクリア扱いにならない。
+// ============================================================
+const SURVIVAL_STAGES = 10;
+const SURVIVAL_LIFE = 100;
+const SURVIVAL_START_GOLD = 300;
+const SURVIVAL_BUDGET_STEP = 50;
+
+function survivalBudgetForRound(round) {
+    const r = Math.max(1, Math.min(SURVIVAL_STAGES, round));
+    return SURVIVAL_START_GOLD + (r - 1) * SURVIVAL_BUDGET_STEP;
+}
+
+// 難易度ごとのAI資金倍率。VERSUS(プレイヤーと完全同条件)とは違い、
+// SURVIVALは意図的に非対称にする: EASYはプレイヤーよりやや少なく、
+// NORMALは互角、HARDはプレイヤーより格上の資金を持つ。「配置は全部ガチ」
+// という要望のため、ラウンド経過での緩和は行わず初手からこの倍率で来る
+const SURVIVAL_AI_BUDGET_MULT = { easy: 0.85, normal: 1.0, hard: 1.2 };
+
+// SURVIVAL 5ステージ目以降にAIが購入できるようになる、敵専用の精鋭「雑魚」。
+// ショップには並ばない(SHOP_UNITS/ELITE_UNITSのどちらにも含めない)。
+// 「ナイトを大型化し、ステータス上限(UNIT_LEVEL_MULT_CAP)まで個別レベルを
+// 注ぎ込みきったのと同等」の性能にし、価格は「プレイヤーが同じ倍率まで
+// unitLevelCost()で課金した場合の実勢コスト」から逆算した
+// (専用ユニットだからと経済を無視した強さにしないための調整)
+const SURVIVAL_ELITE_UNLOCK_STAGE = 5;
+const SURVIVAL_ELITE_WEIGHT = 2;
+const SURVIVAL_ELITE_MOOK_CAP_LEVEL = Math.ceil(Math.log(UNIT_LEVEL_MULT_CAP) / Math.log(1 + UNIT_LEVEL_STAT_GAIN));
+let eliteGuardCost = UNIT_DEFS.knight.cost;
+for(let lv = 0; lv < SURVIVAL_ELITE_MOOK_CAP_LEVEL; lv++) eliteGuardCost += unitLevelCost('knight', lv, 1);
+UNIT_DEFS.eliteGuard = {
+    name:'重装親衛兵', cost:Math.round(eliteGuardCost),
+    hp:Math.round(UNIT_DEFS.knight.hp * UNIT_LEVEL_MULT_CAP), dmg:Math.round(UNIT_DEFS.knight.dmg * UNIT_LEVEL_MULT_CAP),
+    range:UNIT_DEFS.knight.range, speed:UNIT_DEFS.knight.speed, rate:UNIT_DEFS.knight.rate,
+    type:UNIT_DEFS.knight.type, mass:UNIT_DEFS.knight.mass * 1.6, kb:0, scale:3.2,
+    sprite:UNIT_DEFS.knight.sprite, pal:UNIT_DEFS.knight.pal,
+    comment:'SURVIVAL専用の精鋭。並のナイトを遥かに凌ぐ耐久と火力を持つ巨兵'
+};
+const SURVIVAL_ELITE_MOOKS = ['eliteGuard'];
+
+// ============================================================
 // 戦術（ショップの「戦術」タブ）
 // バトルは完全自動のため、購入した戦術はクールダウンごとに自動発動する。
 // cd は秒数。
@@ -574,7 +617,7 @@ const AI_POWER_UNIT = 60;     // このゴールドごとに
 const AI_POWER_GAIN = 0.04;   // +4%（加算）
 const AI_POWER_MAX = {        // モード別の上限倍率
     versus: 1.7,              // 対戦は互角に近い勝負にする
-    survival: 99              // サバイバルは上限なし（いずれ必ず押し負ける）
+    survival: 1.8             // クリア制(全10ステージ)になったため、こちらも頭打ちを設ける
 };
 
 // ============================================================
