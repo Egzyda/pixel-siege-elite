@@ -164,9 +164,14 @@ const UNIT_DEFS = {
     },
     sentry: {
         // 「値段が高いだけで雑魚も倒せない」との声を受けて強化。
-        // 基礎火力・射程を底上げし、ランプ上限も撤廃(狙い続ける限り際限なく伸びる)
+        // 基礎火力・射程を底上げし、ランプ上限も撤廃(狙い続ける限り際限なく伸びる)。
+        // ただしSTORYのボスのように移動が遅くロックが外れにくい相手に対しては、
+        // 無制限ランプだと単体で瞬殺できてしまう(60秒ロックし続けるだけで
+        // 数千〜万単位のダメージに達する)ため、ボス限定でbeamRampCapVsBossの
+        // 有限上限を適用する(雑魚戦の無制限ランプはそのまま。Unit.update()参照)
         name:'セントリー', cost:90, hp:500, dmg:26, range:230, speed:0.26, rate:60,
-        type:'beam', mass:2.0, kb:0, beamRampRate:0.015, beamRampCap:Infinity, scale:2.6, sprite:SPRITES.sentry, pal:PALETTES.boss_construct,
+        type:'beam', mass:2.0, kb:0, beamRampRate:0.015, beamRampCap:Infinity, beamRampCapVsBoss:5,
+        scale:2.6, sprite:SPRITES.sentry, pal:PALETTES.boss_construct,
         comment:'狙いを外さず照射し続けるほどダメージが増す長射程ビーム。対象を切り替えると威力はリセットされる'
     }
 };
@@ -258,26 +263,26 @@ const STORY_STAGES = {
     ]},
     7: { enemies: [
         { type:'goblin', count:5, depth:0.85 }, { type:'skeleton', count:2, depth:0.85 },
-        { type:'orc', count:1, depth:0.50 }, { type:'skeleton', count:2, depth:0.50 },
+        { type:'orc', count:1, depth:0.50 }, { type:'skeleton', count:2, depth:0.50 }, { type:'imp', count:1, depth:0.50 },
         { type:'orc', count:2, depth:0.15 }, { type:'skeleton', count:2, depth:0.15 }, { type:'archer', count:2, depth:0.10 }
     ]},
     8: { enemies: [
         { type:'skeleton', count:4, depth:0.85 }, { type:'orc', count:2, depth:0.85 },
         { type:'skeleton', count:3, depth:0.50 }, { type:'orc', count:2, depth:0.50 },
         { type:'skeleton', count:4, depth:0.15 }, { type:'orc', count:2, depth:0.15 }, { type:'goblin', count:5, depth:0.15 },
-        { type:'wizard', count:1, depth:0.08 }
+        { type:'wizard', count:1, depth:0.08 }, { type:'stoneGuardian', count:1, depth:0.08 }
     ]},
     9: { enemies: [
         { type:'orc', count:1, depth:0.85 }, { type:'skeleton', count:2, depth:0.85 },
-        { type:'orc', count:2, depth:0.50 }, { type:'skeleton', count:2, depth:0.50 }, { type:'healer', count:1, depth:0.50 },
+        { type:'orc', count:2, depth:0.50 }, { type:'skeleton', count:2, depth:0.50 }, { type:'healer', count:1, depth:0.50 }, { type:'lich', count:1, depth:0.50 },
         { type:'orc', count:2, depth:0.15 }, { type:'skeleton', count:2, depth:0.15 }, { type:'goblin', count:5, depth:0.15 },
         { type:'giant', count:1, depth:0.08 }
     ]},
     10: { enemies: [
-        { type:'goblin', count:10, depth:0.85 }, { type:'orc', count:2, depth:0.85 },
-        { type:'orc', count:3, depth:0.50 }, { type:'skeleton', count:5, depth:0.50 },
+        { type:'goblin', count:10, depth:0.85 }, { type:'orc', count:2, depth:0.85 }, { type:'knight', count:2, depth:0.85 },
+        { type:'orc', count:3, depth:0.50 }, { type:'skeleton', count:5, depth:0.50 }, { type:'warlord', count:1, depth:0.50 },
         { type:'orc', count:4, depth:0.15 }, { type:'skeleton', count:5, depth:0.15 },
-        { type:'archer', count:2, depth:0.08 }, { type:'wizard', count:1, depth:0.08 }
+        { type:'archer', count:2, depth:0.08 }, { type:'wizard', count:1, depth:0.08 }, { type:'sentry', count:1, depth:0.08 }
     ]}
 };
 
@@ -290,13 +295,17 @@ const STORY_LAST_WAVE = 10;
 // あらかじめ底上げした「もう1本の固定台本」として用意し、プレイヤーの
 // 状態は一切参照しない（誰がプレイしても同じ内容になる）
 // ============================================================
-const STORY_EXTRA_ENEMY_MULT = 1.15;  // 雑魚の数
+// 雑魚の数。STORY_STAGESの大半のグループは1〜3体と少人数のため、
+// Math.round()だと端数が四捨五入で消えて増加0のグループが大半になり、
+// 「通常と差が分からない」原因になっていた。Math.ceil()に変えることで
+// count>=1のグループには必ず最低+1体が乗るようにしてある
+const STORY_EXTRA_ENEMY_MULT = 1.2;
 
 const STORY_STAGES_EXTRA = {};
 Object.keys(STORY_STAGES).forEach(k => {
     STORY_STAGES_EXTRA[k] = {
         enemies: STORY_STAGES[k].enemies.map(e => ({
-            ...e, count: Math.max(e.count, Math.round(e.count * STORY_EXTRA_ENEMY_MULT))
+            ...e, count: Math.max(e.count, Math.ceil(e.count * STORY_EXTRA_ENEMY_MULT))
         }))
     };
 });
@@ -335,7 +344,10 @@ const BOSS_DEFS = {
     4: {
         name:'ゴブリンキング', hp:3500, dmg:100, speed:0.18, special:'summon',
         palette:PALETTES.boss_goblin, sprite:SPRITES.boss_orc,
-        summonType:'goblin', summonCount:2, summonInterval:300,
+        // 召喚間隔300→450(5秒→7.5秒)に緩和。ボス3(1体/6.67秒)より濃い召喚レート
+        // だったため、「本編最初のボスが一番きつい」と感じる主因になっていた。
+        // 本体のHP・攻撃力・薙ぎ払いは据え置き(弱体化しすぎないため)
+        summonType:'goblin', summonCount:2, summonInterval:450,
         meleeSplash:110, meleeSplashRate:0.7 // 大振りの薙ぎ払い。密集した壁ユニットを咎める広範囲攻撃
     },
     5: {
