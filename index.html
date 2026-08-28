@@ -200,18 +200,18 @@ body {
 #prep-bar, #battle-bar {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
 }
 
-.bar-info { min-width: 78px; }
+.bar-info { min-width: 72px; }
 .gold-box {
     font-size: 17px;
     font-weight: 900;
     color: var(--gold);
     line-height: 1.1;
+    white-space: nowrap;
 }
-.gold-box small { font-size: 9px; color: var(--muted); font-weight: 700; }
-.deploy-box { font-size: 10px; color: var(--muted); font-weight: 700; }
+.deploy-box { font-size: 10px; color: var(--muted); font-weight: 700; white-space: nowrap; }
 .deploy-box.full { color: var(--red); }
 
 .btn {
@@ -228,13 +228,16 @@ body {
     cursor: pointer;
 }
 .btn:active { transform: scale(0.98); }
-.btn.shop { flex: 0 0 auto; color: var(--gold); border-color: rgba(251,191,36,0.45); }
+.btn.shop { flex: 0 0 auto; color: var(--gold); border-color: rgba(251,191,36,0.45); padding: 13px 10px; }
 .btn.primary {
     flex: 1 1 auto;
     background: linear-gradient(135deg, var(--accent), #ef4444);
     border-color: transparent;
     color: #fff;
-    font-size: 15px;
+    font-size: 14px;
+    letter-spacing: 0;
+    padding: 13px 4px;
+    white-space: nowrap;
     box-shadow: 0 4px 16px rgba(245,158,11,0.3);
 }
 .btn.primary:disabled { opacity: 0.4; box-shadow: none; }
@@ -870,7 +873,7 @@ body {
         <div id="prep-bar">
             <button class="icon-btn" id="btn-home" title="タイトルへ戻る">🏠</button>
             <div class="bar-info">
-                <div class="gold-box"><span id="gold-val">0</span>G <small>予算</small></div>
+                <div class="gold-box"><span id="gold-val">0</span>G</div>
                 <div class="deploy-box" id="deploy-box">配置 0/15</div>
             </div>
             <button class="icon-btn" id="btn-undo" title="ひとつ戻す">↺</button>
