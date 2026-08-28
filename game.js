@@ -16,7 +16,7 @@ const RECORDS_KEY = 'pixelSiegeElite_records_v1';
 const state = {
     w: 0, h: 0,               // フィールドの論理サイズ（CSS ピクセル）
     scene: 'title',           // title / mode / prep / battle / result
-    mode: 'story',            // story（ステージ） / survival（無限） / versus（体力制対戦）
+    mode: 'story',            // story（ステージ） / survival（クリア制・全10ステージ） / versus（体力制対戦）
     difficulty: 'normal',     // AI 対戦モードの難易度
     storyExtra: false,        // STORY EXTRA（初回全クリア後に解禁される高難度周回）中か
     round: 1,                 // ウェーブ番号 / ラウンド番号
@@ -198,9 +198,9 @@ function upgradePrice(key) {
 // ============================================================
 // フィールドのレイアウト計算
 // ============================================================
-// VERSUS モードは画面上部に体力ゲージを表示するため、その高さぶん敵陣を下げる
+// SURVIVAL / VERSUS は画面上部に体力ゲージを表示するため、その高さぶん敵陣を下げる
 function topInset() {
-    return state.mode === 'versus' ? 34 : 0;
+    return (state.mode === 'versus' || state.mode === 'survival') ? 34 : 0;
 }
 
 function layout() {
@@ -1236,19 +1236,19 @@ function buildAiRoster() {
     }
 
     const preset = AI_PRESETS[state.difficulty];
-    // budgetMult(難易度ごとの資金補正)はSURVIVAL限定のレバー。
-    // VERSUSはプレイヤーと全く同じ条件を保つ必要があるため、資金の水増し/カットは
-    // 一切行わず、収入は常にbudgetForRound()そのまま(=プレイヤーと同額)にする。
-    // 序盤にいきなり差がつかないよう、予算補正は数ラウンドかけて効いてくるが、
-    // HARDは「本気で対策して勝ちにくる」難易度のため、この緩和は適用せず
-    // 初回ラウンドから全力で来る
-    let ramp = 1;
+    let roundIncome;
     if(state.mode === 'survival') {
-        ramp = state.difficulty === 'hard'
-            ? preset.budgetMult
-            : 1 + (preset.budgetMult - 1) * Math.min(1, state.round / 3);
+        // SURVIVAL専用の予算テーブル。VERSUSと違い意図的に非対称にしてあり
+        // (EASY<プレイヤー、NORMAL=同額、HARD>プレイヤー)、「配置は全部ガチ」
+        // という要望のため、ラウンド経過での緩和はせず初手からこの倍率で来る
+        const mult = SURVIVAL_AI_BUDGET_MULT[state.difficulty];
+        roundIncome = Math.round(survivalBudgetForRound(state.round) * mult);
+    } else {
+        // VERSUSはプレイヤーと全く同じ条件を保つ必要があるため、
+        // 資金の水増し/カットは一切行わず、収入は常にbudgetForRound()そのまま
+        // (=プレイヤーと同額)にする
+        roundIncome = budgetForRound(state.round);
     }
-    const roundIncome = Math.round(budgetForRound(state.round) * ramp);
     state.aiGold += roundIncome;
 
     // VERSUS限定: プレイヤーと同じユニット個別レベルアップの仕組みをAIにも
@@ -1270,7 +1270,11 @@ function buildAiRoster() {
     }
 
     // 2 ラウンド目以降は直前のプレイヤー編成を見て刺さるユニットを選ぶ
-    const pool = counteredPool(preset, state.round > 1 ? state.roster : []);
+    let pool = counteredPool(preset, state.round > 1 ? state.roster : []);
+    // SURVIVAL: 5ステージ目以降、敵専用の精鋭ユニットが抽選候補に混じるようになる
+    if(state.mode === 'survival' && state.round >= SURVIVAL_ELITE_UNLOCK_STAGE) {
+        pool = pool.concat(SURVIVAL_ELITE_MOOKS.map(key => ({ key, w: SURVIVAL_ELITE_WEIGHT })));
+    }
     const comp = analyzeRoster(state.roster);
 
     const cap = maxUnitsFor(state.mode);
@@ -1478,28 +1482,46 @@ function endBattle(win, reason) {
     const tally = collectBattleResult();
     const isDraw = (win === null);
     const isFinalStory = (state.mode === 'story' && win === true && state.round >= STORY_LAST_WAVE);
+    // SURVIVAL / VERSUS は共通で「拠点とは別の体力」を持つ対戦形式
+    const isLifeMode = (state.mode === 'versus' || state.mode === 'survival');
+    const isFinalSurvivalStage = (state.mode === 'survival' && state.round >= SURVIVAL_STAGES);
 
-    let lifeDmg = 0, matchOver = false, matchWin = false;
+    let lifeDmg = 0, matchOver = false, matchWin = false, survivalEndReason = null;
 
-    if(state.mode === 'versus' && !isDraw) {
+    if(isLifeMode && !isDraw) {
         // 負けた側が「勝った側の生き残りユニットのコスト合計」に応じたダメージを受ける
         const winnerValue = win ? tally.playerValue : tally.enemyValue;
         lifeDmg = clamp(Math.round(winnerValue * VERSUS_DMG_COEF), VERSUS_DMG_MIN, VERSUS_DMG_MAX);
         const nextPlayerLife = win ? state.playerLife : Math.max(0, state.playerLife - lifeDmg);
         const nextAiLife = win ? Math.max(0, state.aiLife - lifeDmg) : state.aiLife;
 
-        matchOver = (nextPlayerLife <= 0 || nextAiLife <= 0);
-        matchWin = (nextAiLife <= 0 && nextPlayerLife > 0);
+        if(state.mode === 'versus') {
+            matchOver = (nextPlayerLife <= 0 || nextAiLife <= 0);
+            matchWin = (nextAiLife <= 0 && nextPlayerLife > 0);
+        } else {
+            // SURVIVAL: 相手の体力を削り切っても最終ステージ以外では終わらせない。
+            // 「最終ステージは実際に勝たないとクリアにならない」という仕様のため、
+            // 決着は「プレイヤーの体力が尽きた」か「最終ステージの決着がついた」時のみ
+            const lifeZero = nextPlayerLife <= 0;
+            matchOver = lifeZero || isFinalSurvivalStage;
+            matchWin = isFinalSurvivalStage && win === true;
+            if(matchOver) survivalEndReason = lifeZero ? 'lifeZero' : (matchWin ? 'cleared' : 'finalStageFailed');
+        }
+    } else if(state.mode === 'survival' && isDraw && isFinalSurvivalStage) {
+        // 最終ステージの相打ちも「勝ってはいない」ためクリア扱いにはしない
+        matchOver = true;
+        matchWin = false;
+        survivalEndReason = 'finalStageFailed';
     }
 
-    state.result = { win, reason, isFinalStory, isDraw, tally, lifeDmg, matchOver, matchWin };
+    state.result = { win, reason, isFinalStory, isDraw, tally, lifeDmg, matchOver, matchWin, survivalEndReason, stage: state.round };
 
     // 次ラウンドの予算を配布
-    // （VERSUS はラウンドに負けても、体力が残っていれば試合は続く）
-    if(state.mode === 'versus') {
+    // （SURVIVAL / VERSUS はラウンドに負けても、体力が残っていれば試合は続く）
+    if(isLifeMode) {
         if(!matchOver) {
             state.round++;
-            state.gold += budgetForRound(state.round);
+            state.gold += (state.mode === 'survival' ? survivalBudgetForRound(state.round) : budgetForRound(state.round));
         } else {
             deleteSave();
         }
@@ -1510,13 +1532,11 @@ function endBattle(win, reason) {
             state.round++;
             state.gold += budgetForRound(state.round);
         }
-    } else if(state.mode === 'survival') {
-        deleteSave(); // サバイバルは敗北で終了
     }
 
     updateRecords();
 
-    if(state.mode === 'versus' && !isDraw) {
+    if(isLifeMode && !isDraw) {
         playVersusLifeAnimation(win, lifeDmg, showResultScreen);
     } else {
         updateVersusHud();
@@ -1621,21 +1641,42 @@ function showResultScreen() {
         rows.push(['生き残り', `味方 ${r.tally.playerAlive} / 敵 ${r.tally.enemyAlive}`]);
 
     } else if(state.mode === 'survival') {
-        // --- SURVIVAL: 負けたら終了 ---
-        if(r.win || r.isDraw) {
-            title.textContent = 'SURVIVED';
-            title.className = 'result-title win';
-            msg.textContent = `ラウンド ${state.round - 1} を突破！`;
+        // --- SURVIVAL: VERSUSと同じ体力制。ただし最終(SURVIVAL_STAGES)ステージ
+        // だけは実際に勝たないとクリア扱いにならない ---
+        if(r.matchOver) {
+            if(r.survivalEndReason === 'cleared') {
+                title.textContent = 'ALL CLEAR';
+                title.className = 'result-title win';
+                msg.textContent = `全${SURVIVAL_STAGES}ステージを制覇した！`;
+            } else if(r.survivalEndReason === 'finalStageFailed') {
+                title.textContent = 'NO CLEAR';
+                title.className = 'result-title lose';
+                msg.textContent = `最終ステージ(${SURVIVAL_STAGES})を突破できなかった…`;
+            } else {
+                title.textContent = 'GAME OVER';
+                title.className = 'result-title lose';
+                msg.textContent = `ステージ ${r.stage} で力尽きた…`;
+            }
+            showNext = false;
+            showRetry = false;
+        } else if(r.isDraw) {
+            title.textContent = 'DRAW';
+            title.className = 'result-title';
+            msg.textContent = '互角 — どちらの体力も減らなかった';
             showNext = true;
         } else {
-            title.textContent = 'GAME OVER';
-            title.className = 'result-title lose';
-            msg.textContent = `ラウンド ${state.round} で力尽きた（${r.reason || '敗北'}）`;
+            title.textContent = r.win ? 'STAGE CLEAR' : 'STAGE LOSE';
+            title.className = 'result-title ' + (r.win ? 'win' : 'lose');
+            msg.textContent = r.win
+                ? `ステージ ${r.stage} 突破！`
+                : (r.reason || '拠点を落とされた');
+            showNext = true;
         }
-        rows.push(['到達ラウンド', `${r.win ? state.round - 1 : state.round}`]);
-        rows.push(['撃破数', `${state.kills}`]);
-        rows.push(['戦力', `${state.roster.length} 体`]);
-        rows.push(['拠点HP', `${baseRatio}%`]);
+        if(!r.isDraw) rows.push([r.win ? '相手に与えたダメージ' : '受けたダメージ', `${r.lifeDmg}`, 'dmg']);
+        rows.push(['ステージ', `${r.stage} / ${SURVIVAL_STAGES}`]);
+        rows.push(['自分の体力', `${state.playerLife}`]);
+        rows.push(['相手の体力', `${state.aiLife}`]);
+        rows.push(['生き残り', `味方 ${r.tally.playerAlive} / 敵 ${r.tally.enemyAlive}`]);
 
     } else {
         // --- STORY ---
@@ -1687,7 +1728,13 @@ function showResultScreen() {
 function defaultRecords() {
     return {
         story: { cleared: false, bestWave: 0, clearCount: 0, extraCleared: false, extraBestWave: 0, extraClearCount: 0 },
-        survival: { easy: 0, normal: 0, hard: 0 },
+        // SURVIVALはクリア制(全SURVIVAL_STAGES)になったため、STORYと同じ
+        // {cleared, bestStage, clearCount} の形を難易度ごとに持つ
+        survival: {
+            easy:   { cleared: false, bestStage: 0, clearCount: 0 },
+            normal: { cleared: false, bestStage: 0, clearCount: 0 },
+            hard:   { cleared: false, bestStage: 0, clearCount: 0 }
+        },
         versus: { easy: { win: 0, lose: 0 }, normal: { win: 0, lose: 0 }, hard: { win: 0, lose: 0 } }
     };
 }
@@ -1698,9 +1745,19 @@ function loadRecords() {
         const base = defaultRecords();
         if(!raw) return base;
         const saved = JSON.parse(raw);
+        // survivalは旧仕様(難易度ごとの単なる到達ラウンド数値)から新仕様
+        // (オブジェクト)へ形が変わったため、旧形式のデータは互換を取らず
+        // 初期値から始める
+        const survival = {};
+        ['easy', 'normal', 'hard'].forEach(d => {
+            const sv = saved.survival && saved.survival[d];
+            survival[d] = (sv && typeof sv === 'object')
+                ? Object.assign({}, base.survival[d], sv)
+                : base.survival[d];
+        });
         return {
             story: Object.assign(base.story, saved.story || {}),
-            survival: Object.assign(base.survival, saved.survival || {}),
+            survival,
             versus: Object.assign(base.versus, saved.versus || {})
         };
     } catch(e) {
@@ -1752,8 +1809,14 @@ function updateRecords() {
             }
         }
     } else if(state.mode === 'survival') {
-        const reached = state.round - 1;
-        rec.survival[state.difficulty] = Math.max(rec.survival[state.difficulty] || 0, Math.max(0, reached));
+        // state.round はこの時点で既に「継続する場合だけ」次ステージへ進んでいる
+        // (STORYと同じタイミング)ため、勝敗どちらでも到達段階として扱ってよい
+        const sv = rec.survival[state.difficulty];
+        sv.bestStage = Math.max(sv.bestStage, Math.min(SURVIVAL_STAGES, state.round));
+        if(r.matchOver && r.matchWin) {
+            sv.cleared = true;
+            sv.clearCount++;
+        }
     } else if(state.mode === 'versus' && r.matchOver) {
         const v = rec.versus[state.difficulty];
         if(r.matchWin) v.win++; else v.lose++;
@@ -1766,12 +1829,14 @@ function renderRecords() {
     const rec = state.records || defaultRecords();
     const panel = document.getElementById('records-panel');
 
-    // SURVIVALは最高到達ラウンドがどの難易度でのものかも分かるようにする
+    // SURVIVALはクリア制になったため、STORYと同様にクリア済みかどうかを優先し、
+    // 未クリアなら最高到達ステージがどの難易度でのものかも分かるようにする
     const DIFF_LABEL = { easy: 'EASY', normal: 'NORMAL', hard: 'HARD' };
-    let survBest = 0, survBestDiff = null;
+    let survBest = 0, survBestDiff = null, survClearedAny = false, survClearCount = 0;
     ['hard', 'normal', 'easy'].forEach(d => {
-        const v = rec.survival[d] || 0;
-        if(v > survBest) { survBest = v; survBestDiff = d; }
+        const sv = rec.survival[d] || { bestStage: 0, cleared: false, clearCount: 0 };
+        if(sv.cleared) { survClearedAny = true; survClearCount += sv.clearCount || 0; }
+        if((sv.bestStage || 0) > survBest) { survBest = sv.bestStage || 0; survBestDiff = d; }
     });
 
     // VERSUSは勝敗数をまとめて出す(勝った数だけでは戦績が分からないため)
@@ -1783,14 +1848,15 @@ function renderRecords() {
         : rec.story.cleared
             ? `<span class="crown">★ 全クリア${rec.story.clearCount > 1 ? ' ×' + rec.story.clearCount : ''}</span>`
             : (rec.story.bestWave > 0 ? `STAGE ${rec.story.bestWave} 到達` : '未プレイ');
-    const survText = survBest > 0
-        ? `ROUND ${survBest} <small>(${DIFF_LABEL[survBestDiff]})</small>` : '未プレイ';
+    const survText = survClearedAny
+        ? `<span class="crown">★ 全クリア${survClearCount > 1 ? ' ×' + survClearCount : ''}</span>`
+        : (survBest > 0 ? `STAGE ${survBest} 到達 <small>(${DIFF_LABEL[survBestDiff]})</small>` : '未プレイ');
     const vsText = (vsWin + vsLose) > 0 ? `${vsWin}勝${vsLose}敗` : '未プレイ';
 
     panel.innerHTML = `
         <div class="records-title">PLAY RECORD</div>
         <div class="rec-row"><span>STORY</span><span>${storyText}</span></div>
-        <div class="rec-row"><span>SURVIVAL 最高</span><span>${survText}</span></div>
+        <div class="rec-row"><span>SURVIVAL</span><span>${survText}</span></div>
         <div class="rec-row"><span>VERSUS 戦績</span><span>${vsText}</span></div>`;
 
     // モード選択のバッジ
@@ -1798,7 +1864,7 @@ function renderRecords() {
     if(bs) bs.innerHTML = rec.story.extraCleared ? '★ EXTRA CLEAR'
         : (rec.story.cleared ? '★ CLEAR' : (rec.story.bestWave ? 'W' + rec.story.bestWave : ''));
     const bv = document.getElementById('badge-survival');
-    if(bv) bv.textContent = survBest > 0 ? 'BEST R' + survBest : '';
+    if(bv) bv.innerHTML = survClearedAny ? '★ CLEAR' : (survBest > 0 ? 'STAGE ' + survBest : '');
     const bt = document.getElementById('badge-versus');
     if(bt) bt.textContent = vsWin > 0 ? vsWin + ' WIN' : '';
 
@@ -1808,7 +1874,9 @@ function renderRecords() {
         if(!el) return;
         const marks = [];
         if(rec.versus[d].win > 0) marks.push('★' + rec.versus[d].win);
-        if(rec.survival[d] > 0) marks.push('R' + rec.survival[d]);
+        const sv = rec.survival[d];
+        if(sv && sv.cleared) marks.push('★S');
+        else if(sv && sv.bestStage > 0) marks.push('S' + sv.bestStage);
         el.textContent = marks.join(' ');
     });
 
@@ -1825,15 +1893,17 @@ function renderRecords() {
 // ============================================================
 function updateVersusHud() {
     const hud = document.getElementById('versus-hud');
-    if(state.mode !== 'versus' || state.scene === 'title' || state.scene === 'mode') {
+    const isLifeMode = (state.mode === 'versus' || state.mode === 'survival');
+    if(!isLifeMode || state.scene === 'title' || state.scene === 'mode') {
         hud.classList.remove('show');
         return;
     }
+    const lifeMax = state.mode === 'survival' ? SURVIVAL_LIFE : VERSUS_LIFE;
     hud.classList.add('show');
     document.getElementById('life-p-val').textContent = state.playerLife;
     document.getElementById('life-e-val').textContent = state.aiLife;
-    document.getElementById('life-p-fill').style.width = (state.playerLife / VERSUS_LIFE * 100) + '%';
-    document.getElementById('life-e-fill').style.width = (state.aiLife / VERSUS_LIFE * 100) + '%';
+    document.getElementById('life-p-fill').style.width = (state.playerLife / lifeMax * 100) + '%';
+    document.getElementById('life-e-fill').style.width = (state.aiLife / lifeMax * 100) + '%';
 }
 
 // ラウンドをやり直す（準備フェーズ開始時の状態に戻す）
@@ -1890,7 +1960,7 @@ function startNewGame(mode) {
     state.mode = mode;
     if(mode !== 'story') state.storyExtra = false; // EXTRAはSTORY専用のフラグ
     state.round = 1;
-    state.gold = budgetForRound(1);
+    state.gold = mode === 'survival' ? survivalBudgetForRound(1) : budgetForRound(1);
     state.roster = [];
     state.aiRoster = [];
     state.storyEnemies = [];
@@ -1905,14 +1975,14 @@ function startNewGame(mode) {
     state.upgrades = {};
     state.unitLevels = {};
     state.tactics = {};
-    state.playerLife = VERSUS_LIFE;
-    state.aiLife = VERSUS_LIFE;
+    state.playerLife = mode === 'survival' ? SURVIVAL_LIFE : VERSUS_LIFE;
+    state.aiLife = state.playerLife;
     deleteSave();
     enterPrep();
 
     const diff = AI_PRESETS[state.difficulty].label;
     if(mode === 'story') toast(state.storyExtra ? 'STORY EXTRA 開始 — 固定ウェーブが強化された高難度版' : 'STORY モード開始');
-    else if(mode === 'survival') toast(`SURVIVAL 開始（${diff}）— 配置上限なし`);
+    else if(mode === 'survival') toast(`SURVIVAL 開始（${diff}）— 全${SURVIVAL_STAGES}ステージ・体力 ${SURVIVAL_LIFE}`);
     else toast(`VERSUS 開始（${diff}）— 体力 ${VERSUS_LIFE} / 配置上限なし`);
 
     // AI自身の編成の傾向（対策とは別のクセ）を知らせる。対策ヒントと同じ
@@ -3021,7 +3091,7 @@ function updateHud() {
     if(state.mode === 'story') {
         left.textContent = `STORY${state.storyExtra ? ' EXTRA' : ''}  STAGE ${state.round}/${STORY_LAST_WAVE}`;
     } else if(state.mode === 'survival') {
-        left.textContent = `SURVIVAL  R${state.round}  ${diff}`;
+        left.textContent = `SURVIVAL  STAGE ${state.round}/${SURVIVAL_STAGES}  ${diff}`;
     } else {
         left.textContent = `VERSUS  R${state.round}  ${diff}`;
     }
