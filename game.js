@@ -229,13 +229,6 @@ class Base {
         this.shake = 0;
         this.scale = 3;
 
-        // 拠点も射程内の敵ユニットに向けて弱いながら応戦する
-        // （プレイヤー自身の火力源ではなく、丸腰に見えないための最低限の抑止力）
-        this.dmg = 14;
-        this.range = 95;
-        this.rate = 55;
-        this.cd = randRange(0, this.rate); // 初弾のタイミングをずらす
-
         this.reposition();
     }
 
@@ -265,25 +258,6 @@ class Base {
         dt = dt || 1;
         if(this.flash > 0) this.flash--;
         if(this.shake > 0) this.shake *= 0.86;
-        if(this.hp <= 0) return;
-
-        // 射程内の最も近い敵ユニットへ弱い援護射撃を行う
-        if(this.cd > 0) { this.cd -= dt; return; }
-
-        let target = null, bd = Infinity;
-        for(const u of state.units) {
-            if(u.isP === this.isP || u.hp <= 0 || u.invisible) continue;
-            const d = dist(u, this);
-            if(d < bd && d <= this.range) { bd = d; target = u; }
-        }
-        if(target) {
-            this.cd = this.rate;
-            state.projs.push({
-                x: this.x, y: this.y - 20,
-                target, dmg: this.dmg, def: { type: 'ranged' },
-                isP: this.isP, owner: this, active: true
-            });
-        }
     }
 
     draw(ctx) {
@@ -477,13 +451,18 @@ class Unit {
 
         // 攻撃対象の解決。回復役は毎フレーム最も負傷した味方を選び直すが、
         // それ以外は一度ロックした敵ユニット/ボスを、死ぬか大きく引き離される
-        // (TARGET_LOCK_RANGE 超）まで狙い続ける。毎フレーム最寄り優先で選び
+        // (ロック距離超）まで狙い続ける。毎フレーム最寄り優先で選び
         // 直すと、狙っていたタンクより後から近くに現れた雑魚に目移りして
         // しまい、タンクやノックバックによる足止めが機能しなくなるため。
         // 拠点への攻め込み（敵不在時の暫定目標）は敵の出現に反応できるよう
         // ロック対象に含めない。
+        // ロック距離はTARGET_LOCK_RANGEを基本としつつ、セントリーのように
+        // 自身の射程がそれより長いユニットは射程を優先する（射程内にいる
+        // のにロックだけ先に外れ、ボスの召喚した雑魚に目移りしてしまう
+        // 不具合があったため）
+        const lockRange = Math.max(TARGET_LOCK_RANGE, this.range);
         const locked = this.target && this.target.hp > 0 && !this.target.isBase &&
-                       dist(this.target, this) <= TARGET_LOCK_RANGE;
+                       dist(this.target, this) <= lockRange;
         if(this.def.type === 'healer' || !locked) {
             // ビーム系(セントリーなど)は、せっかく育てたランプをボスの召喚した
             // 雑魚に奪われないよう、射程内にボスがいれば雑魚より優先して狙う
@@ -826,9 +805,11 @@ class Boss {
         if(this.data.beam) {
             // 継続照射（エンシェントコンストラクトなど）: 同じ相手を狙い続けるほど
             // ダメージが増える。ロックオンはユニットの TARGET_LOCK_RANGE と同じ
-            // 仕組みを流用し、対象を切り替えると威力はリセットされる
+            // 仕組みを流用し、対象を切り替えると威力はリセットされる。
+            // 射程がTARGET_LOCK_RANGEより長い場合、射程内にいるのにロックだけ
+            // 先に外れてしまわないよう、射程を優先する
             const locked = this.beamTarget && this.beamTarget.hp > 0 &&
-                           dist(this.beamTarget, this) <= TARGET_LOCK_RANGE;
+                           dist(this.beamTarget, this) <= Math.max(TARGET_LOCK_RANGE, this.data.range || 200);
             if(!locked) {
                 if(this.beamDmgAccum > 0 && this.beamTarget && this.beamTarget.hp > 0) {
                     this.beamTarget.takeDmg(this.beamDmgAccum, this);
@@ -3023,8 +3004,8 @@ function checkBattleEnd() {
         if(state.bossCleared) {
             // 撃破直後の余韻演出(紙吹雪など)が終わるまで結果画面への切り替えを少し待つ
             if(state.bossClearDelay > 0) { state.bossClearDelay--; return; }
-            endBattle(true);
-            return;
+            // ボスを倒しただけでは勝利にせず、残っている雑魚も全て倒し切るまで続行する
+            if(!foesAlive) { endBattle(true); return; }
         }
 
         // 味方が全滅し、召喚の見込みもない場合は勝ち目が無いので即敗北にする
