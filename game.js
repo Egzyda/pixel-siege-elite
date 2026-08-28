@@ -1974,7 +1974,7 @@ function startNewGame(mode) {
     const diff = AI_PRESETS[state.difficulty].label;
     if(mode === 'story') toast(state.storyExtra ? 'STORY EXTRA 開始 — 固定ウェーブが強化された高難度版' : 'STORY モード開始');
     else if(mode === 'survival') toast(`SURVIVAL 開始（${diff}）— 全${SURVIVAL_STAGES}ステージ・体力 ${SURVIVAL_LIFE}`);
-    else toast(`VERSUS 開始（${diff}）— 体力 ${VERSUS_LIFE} / 配置上限なし`);
+    else toast(`VERSUS 開始（${diff}）— 体力 ${VERSUS_LIFE}`);
 
     // AI自身の編成の傾向（対策とは別のクセ）を知らせる。対策ヒントと同じ
     // ディレイを使い、開始直後のトーストと表示が入れ替わるようにする
@@ -2610,7 +2610,7 @@ function updatePrepUI() {
     const dep = document.getElementById('deploy-box');
     dep.textContent = (state.mode === 'story')
         ? `配置 ${state.roster.length}/${cap}`
-        : `配置 ${state.roster.length}体（上限なし）`;
+        : `配置 ${state.roster.length}体`;
     dep.classList.toggle('full', state.roster.length >= cap);
 
     document.querySelectorAll('#shop-list .shop-card').forEach(card => {
