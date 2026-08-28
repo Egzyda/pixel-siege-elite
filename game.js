@@ -703,6 +703,7 @@ class Boss {
         this.beamDmgAccum = 0;
         this.beamTickTimer = 0;
         this.corpses = [];
+        this.awakened = false; // 第2形態で遠距離範囲タイプへ覚醒したか(カオスタイタンなど)
         this.scale = 3.5;
         this.radius = 22;
         this.isP = false;
@@ -739,17 +740,24 @@ class Boss {
                 this.phase = targetPhase;
                 this.speed = this.data.speed * this.data.phases[targetPhase].speedMult;
                 this.dmg = this.data.dmg * this.data.phases[targetPhase].damageMult;
-                spawnPop(this.x, this.y - 60, `PHASE ${targetPhase + 1}!`, '#ef4444');
+
+                // 第2形態(phase===1)への突入時、覚醒データを持つボスは
+                // 遠距離範囲タイプへ変身する(以降ずっと維持)
+                const awakening = targetPhase === 1 && this.data.awaken && !this.awakened;
+                if(awakening) this.awakened = true;
+
+                spawnPop(this.x, this.y - 60, awakening ? '覚醒!!' : `PHASE ${targetPhase + 1}!`, '#ef4444');
                 addShake(16);
 
                 // 一瞬時が止まったような間を置いてから、周囲の味方を全員吹き飛ばす
                 // （フェーズ移行の节目を「見て分かる」演出にするための専用効果。
-                // 通常のノックバック上限(KNOCKBACK_CAP)はここでは適用しない）
+                // 通常のノックバック上限(KNOCKBACK_CAP)はここでは適用しない。
+                // 覚醒時は「壁際まで弾き飛ばす」ための特別に大きな力を使う）
                 state.hitstop = 18;
                 state.units.forEach(u => {
                     if(!u.isP || u.vx === undefined) return;
                     const a = Math.atan2(u.y - this.y, u.x - this.x) || Math.random() * Math.PI * 2;
-                    const k = KNOCKBACK_CAP * 3;
+                    const k = awakening ? KNOCKBACK_CAP * 15 : KNOCKBACK_CAP * 3;
                     u.vx += Math.cos(a) * k;
                     u.vy += Math.sin(a) * k;
                 });
@@ -806,13 +814,25 @@ class Boss {
             }
         } else if(target) {
             const d = dist(target, this);
+            // 覚醒済み(カオスタイタンなど)は近接の薙ぎ払いをやめ、data.awakenの
+            // 長射程・範囲攻撃タイプに切り替わる
+            const awakenRange = this.awakened && this.data.awaken ? this.data.awaken.range : 0;
             // シャドウアサシンなど data.range を持つボスは近接ではなく遠距離攻撃
             // （せっかく敵陣にワープしても接触待ちで意味が薄れないように）
-            const atkRange = this.data.range || (42 + (target.radius || 0));
+            const atkRange = awakenRange || this.data.range || (42 + (target.radius || 0));
             if(d <= atkRange) {
                 if(this.cd <= 0) {
                     this.cd = 60;
-                    if(this.data.range) {
+                    if(awakenRange) {
+                        // 範囲全員に素のdmgをそのまま当てると近接時より強くなって
+                        // しまうため、dmgMultで1発ごとの威力を落とす
+                        state.projs.push({
+                            x: this.x, y: this.y - 20,
+                            target, dmg: this.dmg * (this.data.awaken.dmgMult || 1),
+                            def: { type:'aoe', splash: this.data.awaken.splash },
+                            isP: false, owner: this, active: true
+                        });
+                    } else if(this.data.range) {
                         state.projs.push({
                             x: this.x, y: this.y - 20,
                             target, dmg: this.dmg, def: { type:'ranged' },
@@ -832,7 +852,7 @@ class Boss {
                         if(this.data.lifesteal) {
                             this.hp = Math.min(this.maxHp, this.hp + this.dmg * this.data.lifesteal);
                         }
-                        // 薙ぎ払い（ゴブリン大王など data.meleeSplash を持つ場合のみ。
+                        // 薙ぎ払い（ゴブリンキングなど data.meleeSplash を持つ場合のみ。
                         // オークの近接範囲攻撃と同じ仕組みをボス用に大きな半径で流用）
                         if(this.data.meleeSplash) {
                             const splashDmg = this.dmg * (this.data.meleeSplashRate || 0.6);
@@ -2123,6 +2143,7 @@ function bossAbilityDesc(d) {
     if(d.knockback) parts.push('攻撃にノックバック');
     if(d.lifesteal) parts.push(`与ダメージの${Math.round(d.lifesteal * 100)}%を自己回復`);
     if(d.meleeSplash) parts.push('広範囲の薙ぎ払い');
+    if(d.awaken) parts.push('第2形態で味方を弾き飛ばし、長射程の範囲攻撃タイプに覚醒する');
     return parts.length ? parts.join('・') : '特殊能力なし';
 }
 

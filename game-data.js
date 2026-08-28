@@ -305,7 +305,7 @@ const FIELD_SCALE = 0.7;
 // ============================================================
 const BOSS_DEFS = {
     // --- 1〜3: 準備期間のボス。ゴブリンの上位種という位置づけで、
-    //     4のゴブリン大王につながる小さな前振り ---
+    //     4のゴブリンキングにつながる小さな前振り ---
     1: {
         name:'ゴブリンの偵察隊長', hp:120, dmg:10, speed:0.20, special:null,
         palette:PALETTES.boss_goblin, sprite:SPRITES.goblin
@@ -324,7 +324,7 @@ const BOSS_DEFS = {
     //     移動速度を落とした分(ノロマ化)、雑魚を片付けた後も一方的に
     //     殴られるだけの的にならないよう、耐久・攻撃力を底上げしてある ---
     4: {
-        name:'ゴブリン大王', hp:3500, dmg:100, speed:0.18, special:'summon',
+        name:'ゴブリンキング', hp:3500, dmg:100, speed:0.18, special:'summon',
         palette:PALETTES.boss_goblin, sprite:SPRITES.boss_orc,
         summonType:'goblin', summonCount:2, summonInterval:300,
         meleeSplash:110, meleeSplashRate:0.7 // 大振りの薙ぎ払い。密集した壁ユニットを咎める広範囲攻撃
@@ -363,6 +363,15 @@ const BOSS_DEFS = {
     10: {
         name:'カオスタイタン', hp:14000, dmg:270, speed:0.13, special:'phases',
         palette:PALETTES.boss_titan, sprite:SPRITES.boss_demon,
+        // 覚醒前(第1形態)は広範囲の薙ぎ払いを持つ近接タイプ。
+        // dmgがゴブリンキング(100)よりずっと高い(270)ため、meleeSplashRateは
+        // 低めにして「主目標は激痛・巻き添えは広く浅く」の塩梅に調整してある
+        meleeSplash:150, meleeSplashRate:0.35,
+        // HP66%以下(第2形態)に入ると、味方を壁際まで弾き飛ばしたうえで
+        // 長射程の範囲攻撃タイプへ覚醒する(以降ずっと維持。Boss.update()参照)。
+        // dmgMultで爆発1発ごとの威力を落とす(素のdmgをそのまま範囲全員に
+        // 当てると、近接の薙ぎ払いよりむしろ火力が上がってしまうため)
+        awaken: { range:200, splash:90, dmgMult:0.4 },
         phases: [
             { hpThreshold:1.0,  speedMult:1.0, damageMult:1.0 },
             { hpThreshold:0.66, speedMult:1.3, damageMult:1.2 },
