@@ -495,17 +495,32 @@ const SURVIVAL_AI_BUDGET_MULT = { easy: 0.85, normal: 1.0, hard: 1.2 };
 const SURVIVAL_ELITE_UNLOCK_STAGE = 5;
 const SURVIVAL_ELITE_WEIGHT = 2;
 const SURVIVAL_ELITE_MOOK_CAP_LEVEL = Math.ceil(Math.log(UNIT_LEVEL_MULT_CAP) / Math.log(1 + UNIT_LEVEL_STAT_GAIN));
-let eliteGuardCost = UNIT_DEFS.knight.cost;
-for(let lv = 0; lv < SURVIVAL_ELITE_MOOK_CAP_LEVEL; lv++) eliteGuardCost += unitLevelCost('knight', lv, 1);
-UNIT_DEFS.eliteGuard = {
-    name:'重装親衛兵', cost:Math.round(eliteGuardCost),
-    hp:Math.round(UNIT_DEFS.knight.hp * UNIT_LEVEL_MULT_CAP), dmg:Math.round(UNIT_DEFS.knight.dmg * UNIT_LEVEL_MULT_CAP),
-    range:UNIT_DEFS.knight.range, speed:UNIT_DEFS.knight.speed, rate:UNIT_DEFS.knight.rate,
-    type:UNIT_DEFS.knight.type, mass:UNIT_DEFS.knight.mass * 1.6, kb:0, scale:3.2,
-    sprite:UNIT_DEFS.knight.sprite, pal:UNIT_DEFS.knight.pal,
-    comment:'SURVIVAL専用の精鋭。並のナイトを遥かに凌ぐ耐久と火力を持つ巨兵'
-};
-const SURVIVAL_ELITE_MOOKS = ['eliteGuard'];
+
+// 元になるユニットの性質(射程・範囲攻撃の有無など)はそのまま引き継ぎ、
+// cost/hp/dmg/mass/scaleだけを差し替える。近接・遠距離・範囲攻撃と
+// タイプの異なる精鋭を複数用意し、同じ顔ぶれで飽きさせないようにする
+function makeSurvivalElite(baseKey, name, comment) {
+    const base = UNIT_DEFS[baseKey];
+    let cost = base.cost;
+    for(let lv = 0; lv < SURVIVAL_ELITE_MOOK_CAP_LEVEL; lv++) cost += unitLevelCost(baseKey, lv, 1);
+    return Object.assign({}, base, {
+        name, comment,
+        cost: Math.round(cost),
+        hp: Math.round(base.hp * UNIT_LEVEL_MULT_CAP),
+        dmg: Math.round(base.dmg * UNIT_LEVEL_MULT_CAP),
+        mass: base.mass * 1.6,
+        scale: (base.scale || 2) * 1.5
+    });
+}
+
+UNIT_DEFS.eliteGuard = makeSurvivalElite('knight', '重装親衛兵',
+    'SURVIVAL専用の精鋭。並のナイトを遥かに凌ぐ耐久と火力を持つ巨兵');
+UNIT_DEFS.eliteArcher = makeSurvivalElite('archer', '精鋭狙撃兵',
+    'SURVIVAL専用の精鋭。並のアーチャーを遥かに凌ぐ射程外からの火力を持つ狙撃手');
+UNIT_DEFS.eliteMage = makeSurvivalElite('wizard', '大魔導士',
+    'SURVIVAL専用の精鋭。並のメイジを遥かに凌ぐ広範囲魔法を放つ強力な魔導士');
+
+const SURVIVAL_ELITE_MOOKS = ['eliteGuard', 'eliteArcher', 'eliteMage'];
 
 // ============================================================
 // 戦術（ショップの「戦術」タブ）
