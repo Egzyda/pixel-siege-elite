@@ -234,7 +234,9 @@ class Base {
 
     reposition() {
         this.x = state.w / 2;
-        this.y = this.isP ? state.h - 22 : 72 + topInset();
+        // 敵拠点は72→90に変更。VERSUS/SURVIVALの上部体力ゲージ(#versus-hud)と
+        // 拠点自身のHPバーが重なって見えなくなっていたため、その分下げて余白を確保する
+        this.y = this.isP ? state.h - 22 : 90 + topInset();
     }
 
     takeDmg(v, attacker) {
