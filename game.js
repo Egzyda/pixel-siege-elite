@@ -853,7 +853,10 @@ class Boss {
             const atkRange = awakenRange || this.data.range || (42 + (target.radius || 0));
             if(d <= atkRange) {
                 if(this.cd <= 0) {
-                    this.cd = 60;
+                    // 攻撃間隔は通常60固定だが、data.atkRate（常時）や
+                    // data.awaken.atkRate（覚醒中のみ）があればそちらを優先する
+                    // （カオスタイタンEXTRA版の「覚醒後は攻撃速度も上がる」個性など）
+                    this.cd = (awakenRange && this.data.awaken.atkRate) || this.data.atkRate || 60;
                     if(awakenRange) {
                         // 範囲全員に素のdmgをそのまま当てると近接時より強くなって
                         // しまうため、dmgMultで1発ごとの威力を落とす
