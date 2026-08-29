@@ -729,10 +729,10 @@ class Boss {
         this.anim = 0;
         this.specialTimer = 0;
         this.phase = 0;
-        this.beamTarget = null;
-        this.beamTime = 0;
-        this.beamDmgAccum = 0;
-        this.beamTickTimer = 0;
+        // 継続照射(beam)の対象スロット。1体につき{target,time,dmgAccum,tickTimer}を持ち、
+        // data.beamTargetCountの数だけ同時に狙える(エンシェントコンストラクトは3体)
+        this.beamTargets = [];
+        this.beamActiveTime = 0;
         this.corpses = [];
         this.awakened = false; // 第2形態で遠距離範囲タイプへ覚醒したか(カオスタイタンなど)
         this.scale = 3.5;
@@ -810,40 +810,66 @@ class Boss {
 
         if(this.data.beam) {
             // 継続照射（エンシェントコンストラクトなど）: 同じ相手を狙い続けるほど
-            // ダメージが増える。ロックオンはユニットの TARGET_LOCK_RANGE と同じ
-            // 仕組みを流用し、対象を切り替えると威力はリセットされる。
-            // 射程がTARGET_LOCK_RANGEより長い場合、射程内にいるのにロックだけ
-            // 先に外れてしまわないよう、射程を優先する
-            const locked = this.beamTarget && this.beamTarget.hp > 0 &&
-                           dist(this.beamTarget, this) <= Math.max(TARGET_LOCK_RANGE, this.data.range || 200);
-            if(!locked) {
-                if(this.beamDmgAccum > 0 && this.beamTarget && this.beamTarget.hp > 0) {
-                    this.beamTarget.takeDmg(this.beamDmgAccum, this);
+            // ダメージが増える。data.beamTargetCount(未指定なら1)体まで同時に
+            // 狙え、それぞれ独立にランプ(ダメージ上昇)が進む。ロックオンは
+            // ユニットの TARGET_LOCK_RANGE と同じ仕組みを流用し、対象を切り替える
+            // と威力はリセットされる。射程がTARGET_LOCK_RANGEより長い場合、
+            // 射程内にいるのにロックだけ先に外れてしまわないよう、射程を優先する
+            const beamRange = this.data.range || 200;
+            const slotCount = this.data.beamTargetCount || 1;
+            const lockRange = Math.max(TARGET_LOCK_RANGE, beamRange);
+
+            // ロックが外れた(死亡/大きく離れた)対象は蓄積ダメージを精算してスロットを空ける
+            this.beamTargets = this.beamTargets.filter(slot => {
+                const locked = slot.target && slot.target.hp > 0 && dist(slot.target, this) <= lockRange;
+                if(!locked) {
+                    if(slot.dmgAccum > 0 && slot.target && slot.target.hp > 0) slot.target.takeDmg(slot.dmgAccum, this);
+                    return false;
                 }
-                this.beamTarget = target; this.beamTime = 0;
-                this.beamDmgAccum = 0; this.beamTickTimer = 0;
+                return true;
+            });
+
+            // 空いたスロットを、まだロックしていない近い順のプレイヤーユニットで埋める
+            if(this.beamTargets.length < slotCount) {
+                const locked = new Set(this.beamTargets.map(s => s.target));
+                state.units
+                    .filter(u => u.isP && !u.invisible && !locked.has(u))
+                    .sort((a, b) => dist(a, this) - dist(b, this))
+                    .slice(0, slotCount - this.beamTargets.length)
+                    .forEach(u => this.beamTargets.push({ target: u, time: 0, dmgAccum: 0, tickTimer: 0 }));
+                // 雑魚が誰もいない場合だけ、1枠だけ拠点を狙わせる
+                if(this.beamTargets.length === 0 && target) {
+                    this.beamTargets.push({ target, time: 0, dmgAccum: 0, tickTimer: 0 });
+                }
             }
-            const bt = this.beamTarget;
-            if(bt) {
+
+            let anyInRange = false;
+            this.beamTargets.forEach(slot => {
+                const bt = slot.target;
                 const bDist = dist(bt, this);
-                const beamRange = this.data.range || 200;
                 if(bDist <= beamRange) {
-                    this.beamTime += dt;
-                    const rampMult = Math.min(this.data.beamRampCap, 1 + this.data.beamRampRate * this.beamTime);
-                    this.beamDmgAccum += this.dmg * rampMult * dt / 60;
-                    this.beamTickTimer += dt;
-                    if(this.beamTickTimer >= BEAM_TICK_INTERVAL) {
-                        this.beamTickTimer = 0;
-                        bt.takeDmg(this.beamDmgAccum, this);
-                        this.beamDmgAccum = 0;
+                    anyInRange = true;
+                    slot.time += dt;
+                    const rampMult = Math.min(this.data.beamRampCap, 1 + this.data.beamRampRate * slot.time);
+                    slot.dmgAccum += this.dmg * rampMult * dt / 60;
+                    slot.tickTimer += dt;
+                    if(slot.tickTimer >= BEAM_TICK_INTERVAL) {
+                        slot.tickTimer = 0;
+                        bt.takeDmg(slot.dmgAccum, this);
+                        slot.dmgAccum = 0;
                     }
                     state.fx.push({ type:'laser', x1:this.x, y1:this.y - 18, x2:bt.x, y2:bt.y - 10, life:14, width:2.5, color:'#60a5fa' });
-                    if(Math.floor(this.beamTime) % 60 === 0) addShake(2);
-                } else {
-                    const a = Math.atan2(bt.y - this.y, bt.x - this.x);
-                    this.x += Math.cos(a) * this.speed * dt;
-                    this.y += Math.sin(a) * this.speed * dt;
                 }
+            });
+            if(anyInRange) {
+                this.beamActiveTime += dt;
+                if(Math.floor(this.beamActiveTime) % 60 === 0) addShake(2);
+            } else if(this.beamTargets.length > 0) {
+                // 全対象が射程外なら、先頭のロック対象へ寄っていく
+                const bt = this.beamTargets[0].target;
+                const a = Math.atan2(bt.y - this.y, bt.x - this.x);
+                this.x += Math.cos(a) * this.speed * dt;
+                this.y += Math.sin(a) * this.speed * dt;
             }
         } else if(target) {
             const d = dist(target, this);
@@ -1228,6 +1254,40 @@ function pickAiLevelTargetFromPool(pool) {
     return best;
 }
 
+// VERSUSラウンド1限定。AI_OPENING_PATTERNSから1つ抽選してそのまま配置する
+// (通常の抽選+レベル投資だと編成が1体だけになる事故が起きうるため)。
+// 配置は前列/後列に分けて画面幅に等間隔で並べ、乱数で散らさず綺麗に見せる
+function applyAiOpeningPattern() {
+    const pattern = AI_OPENING_PATTERNS[Math.floor(Math.random() * AI_OPENING_PATTERNS.length)];
+    const purchased = [];
+    pattern.units.forEach(u => { for(let i = 0; i < u.count; i++) purchased.push(u.key); });
+
+    let cost = purchased.reduce((sum, key) => sum + UNIT_DEFS[key].cost, 0);
+    if(pattern.levels) {
+        Object.keys(pattern.levels).forEach(key => {
+            const n = purchased.filter(k => k === key).length;
+            for(let lv = 0; lv < pattern.levels[key]; lv++) cost += unitLevelCost(key, lv, n);
+            state.aiUnitLevels[key] = aiUnitLevel(key) + pattern.levels[key];
+        });
+    }
+    state.aiGold -= cost;
+
+    const lay = layout();
+    const front = purchased.filter(k => { const t = UNIT_DEFS[k].type; return t === 'melee' || t === 'tank'; });
+    const back = purchased.filter(k => { const t = UNIT_DEFS[k].type; return t !== 'melee' && t !== 'tank'; });
+    const evenX = arr => arr.length > 1
+        ? arr.map((_, i) => 40 + i * ((state.w - 80) / (arr.length - 1)))
+        : [state.w / 2];
+    const frontXs = evenX(front);
+    const backXs = evenX(back);
+    front.forEach((key, i) => {
+        state.aiRoster.push({ id: state.nextId++, key, x: frontXs[i], y: lay.enemyBottom - 10 });
+    });
+    back.forEach((key, i) => {
+        state.aiRoster.push({ id: state.nextId++, key, x: backXs[i], y: lay.enemyTop + 10 });
+    });
+}
+
 // AI の編成を組む（難易度プリセット + プレイヤー編成への対策）
 function buildAiRoster() {
     // SURVIVAL は「メカベラム方式」: 前ラウンドの編成を引き継がず、その時点で
@@ -1256,57 +1316,65 @@ function buildAiRoster() {
     }
     state.aiGold += roundIncome;
 
-    // 2 ラウンド目以降は直前のプレイヤー編成を見て刺さるユニットを選ぶ
-    let pool = counteredPool(preset, state.round > 1 ? state.roster : []);
-    // SURVIVAL: 5ステージ目以降、敵専用の精鋭ユニットが抽選候補に混じるようになる
-    if(state.mode === 'survival' && state.round >= SURVIVAL_ELITE_UNLOCK_STAGE) {
-        pool = pool.concat(SURVIVAL_ELITE_MOOKS.map(key => ({ key, w: SURVIVAL_ELITE_WEIGHT })));
-    }
-    const comp = analyzeRoster(state.roster);
+    // VERSUSのラウンド1(まだ編成が無い)限定: 通常の抽選+レベル投資だと
+    // 「編成が1体だけ」のような事故が起きうるため、NORMAL/HARDは固定の
+    // 開始パターンをそのまま使う(EASYはlevelInvestRatioが0でこの事故が
+    // 起きないため対象外。SURVIVALは毎ラウンド組み直す仕様のため対象外のまま)
+    if(state.mode === 'versus' && state.round === 1 && preset.levelInvestRatio > 0) {
+        applyAiOpeningPattern();
+    } else {
+        // 2 ラウンド目以降は直前のプレイヤー編成を見て刺さるユニットを選ぶ
+        let pool = counteredPool(preset, state.round > 1 ? state.roster : []);
+        // SURVIVAL: 5ステージ目以降、敵専用の精鋭ユニットが抽選候補に混じるようになる
+        if(state.mode === 'survival' && state.round >= SURVIVAL_ELITE_UNLOCK_STAGE) {
+            pool = pool.concat(SURVIVAL_ELITE_MOOKS.map(key => ({ key, w: SURVIVAL_ELITE_WEIGHT })));
+        }
+        const comp = analyzeRoster(state.roster);
 
-    // VERSUS/SURVIVAL共通: プレイヤーと同じユニット個別レベルアップの仕組みを
-    // AIにも使わせる。対象は既存の編成があればその中で最も多い(=主力の)種類、
-    // まだ編成が無い場合(VERSUSの1ラウンド目、SURVIVALの毎ラウンド組み直し直後)は
-    // 購入プールの中で最もウェイトの高いユニットを暫定の主力とみなす。
-    // levelBudgetは「この用途に使ってよい上限」であり、通常予算から天引きして
-    // 取り分けるのではなく、実際に使った分だけをその場でaiGoldから払う
-    // (取り分け→未使用分を後で返す方式だと、返金が購入ループに間に合わず
-    // その分だけ毎ラウンド購入力が目減りしてしまう不具合があったため)
-    if((state.mode === 'versus' || state.mode === 'survival') && preset.levelInvestRatio > 0) {
-        let levelBudget = Math.round(roundIncome * preset.levelInvestRatio);
-        const target = pickAiLevelTarget() || pickAiLevelTargetFromPool(pool);
-        if(target) {
-            while(levelBudget > 0 && state.aiGold > 0 && aiUnitLevelMult(target) < UNIT_LEVEL_MULT_CAP) {
-                const n = state.aiRoster.filter(r => r.key === target).length;
-                const cost = unitLevelCost(target, aiUnitLevel(target), n);
-                if(cost > levelBudget || cost > state.aiGold) break;
-                state.aiGold -= cost;
-                levelBudget -= cost;
-                state.aiUnitLevels[target] = aiUnitLevel(target) + 1;
+        // VERSUS/SURVIVAL共通: プレイヤーと同じユニット個別レベルアップの仕組みを
+        // AIにも使わせる。対象は既存の編成があればその中で最も多い(=主力の)種類、
+        // まだ編成が無い場合(SURVIVALの毎ラウンド組み直し直後)は購入プールの中で
+        // 最もウェイトの高いユニットを暫定の主力とみなす。
+        // levelBudgetは「この用途に使ってよい上限」であり、通常予算から天引きして
+        // 取り分けるのではなく、実際に使った分だけをその場でaiGoldから払う
+        // (取り分け→未使用分を後で返す方式だと、返金が購入ループに間に合わず
+        // その分だけ毎ラウンド購入力が目減りしてしまう不具合があったため)
+        if((state.mode === 'versus' || state.mode === 'survival') && preset.levelInvestRatio > 0) {
+            let levelBudget = Math.round(roundIncome * preset.levelInvestRatio);
+            const target = pickAiLevelTarget() || pickAiLevelTargetFromPool(pool);
+            if(target) {
+                while(levelBudget > 0 && state.aiGold > 0 && aiUnitLevelMult(target) < UNIT_LEVEL_MULT_CAP) {
+                    const n = state.aiRoster.filter(r => r.key === target).length;
+                    const cost = unitLevelCost(target, aiUnitLevel(target), n);
+                    if(cost > levelBudget || cost > state.aiGold) break;
+                    state.aiGold -= cost;
+                    levelBudget -= cost;
+                    state.aiUnitLevels[target] = aiUnitLevel(target) + 1;
+                }
             }
         }
+
+        const cap = maxUnitsFor(state.mode);
+
+        // まず購入だけを行う（配置は全種類が出揃ってから決める）
+        const purchased = [];
+        let guard = 400;
+        while(guard-- > 0 && purchased.length < cap) {
+            const affordable = pool.filter(p => aiUnitBuyCost(p.key) <= state.aiGold);
+            if(affordable.length === 0) break;
+
+            // ウェイト付き抽選
+            const total = affordable.reduce((sum, p) => sum + p.w, 0);
+            let r = Math.random() * total;
+            let pick = affordable[affordable.length - 1];
+            for(const p of affordable) { r -= p.w; if(r <= 0) { pick = p; break; } }
+
+            state.aiGold -= aiUnitBuyCost(pick.key);
+            purchased.push(pick.key);
+        }
+
+        placeAiRoster(purchased, comp);
     }
-
-    const cap = maxUnitsFor(state.mode);
-
-    // まず購入だけを行う（配置は全種類が出揃ってから決める）
-    const purchased = [];
-    let guard = 400;
-    while(guard-- > 0 && purchased.length < cap) {
-        const affordable = pool.filter(p => aiUnitBuyCost(p.key) <= state.aiGold);
-        if(affordable.length === 0) break;
-
-        // ウェイト付き抽選
-        const total = affordable.reduce((sum, p) => sum + p.w, 0);
-        let r = Math.random() * total;
-        let pick = affordable[affordable.length - 1];
-        for(const p of affordable) { r -= p.w; if(r <= 0) { pick = p; break; } }
-
-        state.aiGold -= aiUnitBuyCost(pick.key);
-        purchased.push(pick.key);
-    }
-
-    placeAiRoster(purchased, comp);
 
     // 配置上限に達して予算が余った場合は編成強化に回す（プレイヤーの「強化」に相当）
     const powerMax = AI_POWER_MAX[state.mode] || 2.0;

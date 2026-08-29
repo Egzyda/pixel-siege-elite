@@ -383,12 +383,14 @@ const BOSS_DEFS = {
         lifesteal:0.3 // 与えたダメージの30%を自己回復する死霊術師らしい個性
     },
     9: {
-        // dmg は継続照射の基礎DPS(ランプ倍率1倍時)として扱う
+        // dmg は継続照射の基礎DPS(ランプ倍率1倍時、1本あたり)として扱う
         name:'エンシェントコンストラクト', hp:7700, dmg:70, speed:0.10, special:'beam',
         palette:PALETTES.boss_construct, sprite:SPRITES.giant,
         // 継続照射: 同じ相手(拠点含む)を狙い続けるほどダメージが増える。
-        // 対象を切り替えられると威力はリセットされるため、粘着させないことが重要になる
-        beam:true, range:200, beamRampRate:0.0056, beamRampCap:3
+        // 対象を切り替えられると威力はリセットされるため、粘着させないことが重要になる。
+        // 弱いとの指摘を受け、同時に3体まで照射できるように強化し(beamTargetCount)、
+        // 射程も200→240に伸ばした
+        beam:true, range:240, beamTargetCount:3, beamRampRate:0.0056, beamRampCap:3
     },
     10: {
         name:'カオスタイタン', hp:14000, dmg:270, speed:0.13, special:'phases',
@@ -607,6 +609,22 @@ const AI_PRESETS = {
               {key:'stoneGuardian', w:1}, {key:'graveLord', w:2}, {key:'sentry', w:2}]
     }
 };
+
+// ============================================================
+// VERSUSラウンド1限定の「開始パターン」
+// まだ編成が無い状態でのランダム抽選+レベル投資の組み合わせは「編成が1体だけ」
+// のような事故編成になることがあったため、NORMAL/HARDのラウンド1(収入は
+// 常に80G固定)だけはこの固定パターンから1つ抽選してそのまま配置する
+// (EASYはlevelInvestRatioが0でこの事故が起きないため対象外のまま)。
+// levels は「購入直後にそのユニット種へ何回レベルアップを注ぎ込むか」
+// ============================================================
+const AI_OPENING_PATTERNS = [
+    { units:[{key:'knight', count:3}], levels:{knight:2} },              // ナイト3+2強化 = 80G
+    { units:[{key:'knight', count:2}, {key:'archer', count:2}] },        // ナイト+アーチャー = 70G
+    { units:[{key:'giant', count:1}, {key:'archer', count:1}] },         // ゴーレム+アーチャー = 80G
+    { units:[{key:'giant', count:1}, {key:'skeleton', count:1}] },       // ゴーレム+スケルトン = 75G
+    { units:[{key:'archer', count:5}] }                                 // アーチャー物量 = 75G
+];
 
 // ============================================================
 // AI の対策編成ルール（2 ラウンド目以降に適用）
