@@ -59,7 +59,10 @@ const UNIT_DEFS = {
         comment:'安価で並べられる基本歩兵。押し返さずその場で受け止める壁役'
     },
     archer: {
-        name:'アーチャー', cost:30, hp:100, dmg:16, range:150, speed:0.50, rate:50,
+        // 初期予算(80G)で組める編成の幅が狭すぎるとの指摘を受け30→15に値下げ。
+        // ステータスは据え置きのため単体火力のコスパはメイジを上回るが、メイジは
+        // 範囲攻撃(splash)を持つため上位互換にはならない
+        name:'アーチャー', cost:15, hp:100, dmg:16, range:150, speed:0.50, rate:50,
         type:'ranged', mass:0.8, kb:0, sprite:SPRITES.archer, pal:PALETTES.archer,
         comment:'安全な距離から弓で攻撃する'
     },
@@ -92,7 +95,8 @@ const UNIT_DEFS = {
         comment:'薙ぎ払いで周囲も巻き込む近接アタッカー。打たれ弱く長くは耐えられない'
     },
     skeleton: {
-        name:'スケルトン', cost:22, hp:36, dmg:9, range:185, speed:0.34, rate:80,
+        // 元々コスパが最も悪いユニットだったため22→10に値下げ
+        name:'スケルトン', cost:10, hp:36, dmg:9, range:185, speed:0.34, rate:80,
         type:'ranged', mass:0.4, kb:0, sprite:SPRITES.skeleton, pal:PALETTES.skeleton,
         slowDuration: SKELETON_SLOW_DURATION,
         comment:'超長射程の狙撃役。命中した相手を鈍足にする呪いの矢を放つ。打たれ弱く動きも遅い'
@@ -678,7 +682,10 @@ const AI_POWER_MAX = {        // モード別の上限倍率
 const VERSUS_LIFE = 100;        // 初期体力
 const VERSUS_DMG_COEF = 0.18;   // 生存ユニットのコスト合計に掛ける係数
 const VERSUS_DMG_MIN = 8;       // 最低ダメージ
-const VERSUS_DMG_MAX = 26;      // 最大ダメージ（連敗時に一気に詰みにくくする）
+// 最大ダメージ（連敗時に一気に詰みにくくする）。実測では編成が揃うラウンド2〜3
+// 以降ほぼ毎回この上限に張り付き、体力100が26ダメージ×4回弱で溶けて「盛り上がった
+// 直後に決着がつく」体感の主因になっていたため、26→20に引き下げて終盤を1〜2ラウンド延ばす
+const VERSUS_DMG_MAX = 20;
 
 // ラウンドごとの制限時間（フレーム）
 const BATTLE_TIME = {
