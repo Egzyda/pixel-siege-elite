@@ -1275,16 +1275,34 @@ function applyAiOpeningPattern() {
     const lay = layout();
     const front = purchased.filter(k => { const t = UNIT_DEFS[k].type; return t === 'melee' || t === 'tank'; });
     const back = purchased.filter(k => { const t = UNIT_DEFS[k].type; return t !== 'melee' && t !== 'tank'; });
-    const evenX = arr => arr.length > 1
-        ? arr.map((_, i) => 40 + i * ((state.w - 80) / (arr.length - 1)))
-        : [state.w / 2];
-    const frontXs = evenX(front);
-    const backXs = evenX(back);
+
+    // 「離れすぎ」との指摘を受け、画面幅いっぱいに散らすのをやめ、中央に
+    // ユニット1体分くらいの隙間で寄せて並べる。前衛の真後ろに後衛が
+    // つく配置にし、前衛と後衛の縦の隙間もユニット1体分程度まで詰める
+    // （前衛が倒れる前に後衛の攻撃が届くようにするため）
+    const unitW = key => getSpriteBox(UNIT_DEFS[key].sprite).w * unitScale(key);
+    const unitH = key => getSpriteBox(UNIT_DEFS[key].sprite).h * unitScale(key);
+    const centerX = state.w / 2;
+    const laneCount = Math.max(front.length, back.length);
+    let lanes = [centerX];
+    if(laneCount > 1) {
+        const laneGap = Math.max(...purchased.map(unitW)) * 2; // 隙間 ≒ ユニット1体分
+        const start = centerX - laneGap * (laneCount - 1) / 2;
+        lanes = Array.from({ length: laneCount }, (_, i) => start + i * laneGap);
+    }
+
+    const centerY = (lay.enemyTop + lay.enemyBottom) / 2;
+    // 中心間距離 = 自分の半分 + 隙間(1体分) + 相手の半分 ≒ 1体分の高さ×2
+    const hasBothRows = front.length > 0 && back.length > 0;
+    const rowGap = hasBothRows ? Math.max(...purchased.map(unitH)) * 2 : 0;
+    const frontY = centerY + rowGap / 2;
+    const backY = centerY - rowGap / 2;
+
     front.forEach((key, i) => {
-        state.aiRoster.push({ id: state.nextId++, key, x: frontXs[i], y: lay.enemyBottom - 10 });
+        state.aiRoster.push({ id: state.nextId++, key, x: lanes[i], y: frontY });
     });
     back.forEach((key, i) => {
-        state.aiRoster.push({ id: state.nextId++, key, x: backXs[i], y: lay.enemyTop + 10 });
+        state.aiRoster.push({ id: state.nextId++, key, x: lanes[i], y: backY });
     });
 }
 
