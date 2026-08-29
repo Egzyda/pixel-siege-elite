@@ -374,12 +374,16 @@ const BOSS_DEFS = {
     7: {
         name:'フレイムドレイク', hp:9200, dmg:180, speed:0.16, special:'fire',
         palette:PALETTES.boss_drake, sprite:SPRITES.boss_dragon,
-        fireInterval:170, fireDamage:100, fireRadius:100
+        // 「影が薄い」との指摘を受け、攻撃範囲(fireRadius)を100→130に拡大
+        fireInterval:170, fireDamage:100, fireRadius:130
     },
     8: {
-        name:'ネクロロード', hp:11500, dmg:190, speed:0.14, special:'revive',
+        // 「影が薄い」との指摘を受け、蘇生(倒れた雑魚を呼び戻す。序盤は
+        // 雑魚の死体が無く空振りしがちで存在感が薄かった)から、いつでも
+        // 確実に脅威になる召喚(スケルトン5体)に変更
+        name:'ネクロロード', hp:11500, dmg:190, speed:0.14, special:'summon',
         palette:PALETTES.boss_necro, sprite:SPRITES.boss_skeleton,
-        reviveInterval:260, reviveCount:3,
+        summonType:'skeleton', summonCount:5, summonInterval:500,
         lifesteal:0.3 // 与えたダメージの30%を自己回復する死霊術師らしい個性
     },
     9: {
