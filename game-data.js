@@ -299,13 +299,18 @@ const STORY_LAST_WAVE = 10;
 // Math.round()だと端数が四捨五入で消えて増加0のグループが大半になり、
 // 「通常と差が分からない」原因になっていた。Math.ceil()に変えることで
 // count>=1のグループには必ず最低+1体が乗るようにしてある
+// 「後半(6以降)はもっと強くていい、5ステージくらいまではいい」というユーザーの
+// 要望を反映し、6ステージ以降はより高い倍率を適用する（終盤の締めとして強化）
 const STORY_EXTRA_ENEMY_MULT = 1.2;
+const STORY_EXTRA_ENEMY_MULT_LATE = 1.5;
+const STORY_EXTRA_LATE_STAGE_FROM = 6;
 
 const STORY_STAGES_EXTRA = {};
 Object.keys(STORY_STAGES).forEach(k => {
+    const mult = Number(k) >= STORY_EXTRA_LATE_STAGE_FROM ? STORY_EXTRA_ENEMY_MULT_LATE : STORY_EXTRA_ENEMY_MULT;
     STORY_STAGES_EXTRA[k] = {
         enemies: STORY_STAGES[k].enemies.map(e => ({
-            ...e, count: Math.max(e.count, Math.ceil(e.count * STORY_EXTRA_ENEMY_MULT))
+            ...e, count: Math.max(e.count, Math.ceil(e.count * mult))
         }))
     };
 });
@@ -402,17 +407,35 @@ const BOSS_DEFS = {
 };
 
 // STORY EXTRA用にHP・攻撃力を底上げしたボス版（STORY_STAGES_EXTRAの解説を参照）
+// こちらも雑魚数と同様、6以降のボスはより高い倍率を適用する
 const STORY_EXTRA_BOSS_MULT = 1.25;
+const STORY_EXTRA_BOSS_MULT_LATE = 1.6;
 const BOSS_DEFS_EXTRA = {};
 Object.keys(BOSS_DEFS).forEach(k => {
     const d = BOSS_DEFS[k];
+    const mult = Number(k) >= STORY_EXTRA_LATE_STAGE_FROM ? STORY_EXTRA_BOSS_MULT_LATE : STORY_EXTRA_BOSS_MULT;
     BOSS_DEFS_EXTRA[k] = {
         ...d,
-        hp: Math.round(d.hp * STORY_EXTRA_BOSS_MULT),
-        dmg: Math.round(d.dmg * STORY_EXTRA_BOSS_MULT),
-        fireDamage: d.fireDamage ? Math.round(d.fireDamage * STORY_EXTRA_BOSS_MULT) : d.fireDamage
+        hp: Math.round(d.hp * mult),
+        dmg: Math.round(d.dmg * mult),
+        fireDamage: d.fireDamage ? Math.round(d.fireDamage * mult) : d.fireDamage
     };
 });
+// カオスタイタン(ラスボス)はEXTRA限定でさらに個別調整する。ユーザーから
+// 「ロードの蘇生でナイトの壁が保守され続け、カオスタイタンの処理が追いつかない」
+// との指摘を受け、割合ダメージ的な特殊メカニクスの代案として提示された
+// 「攻撃範囲と速度をもう少し広げる」を採用。覚醒後(第2形態以降)の範囲攻撃の
+// 半径と射程を広げ、攻撃間隔も短くして、蘇生し続ける壁を捌ける火力に引き上げる。
+// 通常STORYのラスボスは現状の調整のままとし、EXTRA側だけを強化する
+BOSS_DEFS_EXTRA[10] = {
+    ...BOSS_DEFS_EXTRA[10],
+    awaken: {
+        ...BOSS_DEFS_EXTRA[10].awaken,
+        range: Math.round(BOSS_DEFS_EXTRA[10].awaken.range * 1.3), // 200→260
+        splash: Math.round(BOSS_DEFS_EXTRA[10].awaken.splash * 1.3), // 90→117
+        atkRate: 40 // 覚醒後は攻撃間隔60→40（約1.5倍速）
+    }
+};
 
 // 現在のモード/state.storyExtraに応じて使うべきテーブルを返す
 function currentStoryStages() {
