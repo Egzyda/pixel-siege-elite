@@ -1313,7 +1313,12 @@ function buildAiRoster() {
     // （プレイヤーと全く同じ条件を保つ必要があるのは VERSUS だけなので、
     // 編成を引き継ぐ現行方式は VERSUS のみ残す）
     if(state.mode === 'survival') {
-        state.aiRoster.forEach(r => { state.aiGold += UNIT_DEFS[r.key].cost; });
+        // 「全額返金」のはずが、個別レベル投資で割高購入した分を無視した
+        // 素の価格(UNIT_DEFS.cost)で返金しており、レベルを上げるたびに
+        // 差額が消滅する経済バグになっていた(10ラウンドで2000G超のロスを確認)。
+        // 実勢価格のaiUnitBuyCost()(=aiUnitLevelsをリセットする前の現在の倍率)
+        // で返金することで、プレイヤー側のunitBuyCost()による売却と同じ考え方に揃える
+        state.aiRoster.forEach(r => { state.aiGold += aiUnitBuyCost(r.key); });
         state.aiRoster = [];
         state.aiUnitLevels = {}; // 毎ラウンド資金全額で組み直す方式に合わせ、個別レベル投資もリセットする
     }
@@ -1497,6 +1502,11 @@ function enterPrep() {
     state.kills = 0;
     state.speed = 1;
 
+    // SURVIVALの相手は「ラウンドごとに別人」という体のため、体力は毎ラウンド
+    // 満タンに戻す(勝てば必ず一撃でゼロになる。endBattle()参照)。体力が
+    // 少しずつ減っていき、途中でゼロになった後も試合が続く違和感の解消
+    if(state.mode === 'survival') state.aiLife = SURVIVAL_LIFE;
+
     // 拠点は毎ラウンド全回復した状態で始まる
     state.playerBase = new Base(true);
     state.enemyBase = isVsMode() ? new Base(false) : null;
@@ -1585,9 +1595,16 @@ function endBattle(win, reason) {
     let lifeDmg = 0, matchOver = false, matchWin = false, survivalEndReason = null;
 
     if(isLifeMode && !isDraw) {
-        // 負けた側が「勝った側の生き残りユニットのコスト合計」に応じたダメージを受ける
+        // 負けた側が「勝った側の生き残りユニットのコスト合計」に応じたダメージを受ける。
+        // ただしSURVIVALの相手は「ラウンドごとに別人」という体のため、プレイヤーが
+        // 勝った場合は必ず一撃(現在の体力そのまま)でゼロにする。体力が少しずつ
+        // 減っていき、途中でゼロになった後も試合が続く違和感を解消するため
         const winnerValue = win ? tally.playerValue : tally.enemyValue;
-        lifeDmg = clamp(Math.round(winnerValue * VERSUS_DMG_COEF), VERSUS_DMG_MIN, VERSUS_DMG_MAX);
+        if(state.mode === 'survival' && win) {
+            lifeDmg = state.aiLife;
+        } else {
+            lifeDmg = clamp(Math.round(winnerValue * VERSUS_DMG_COEF), VERSUS_DMG_MIN, VERSUS_DMG_MAX);
+        }
         const nextPlayerLife = win ? state.playerLife : Math.max(0, state.playerLife - lifeDmg);
         const nextAiLife = win ? Math.max(0, state.aiLife - lifeDmg) : state.aiLife;
 
