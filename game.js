@@ -29,6 +29,7 @@ const state = {
     aiPower: 1,               // AI が余剰予算で得た編成強化倍率
     aiPersonality: null,      // AI の「好み」（試合開始時に抽選、試合中は固定）
     aiUnitLevels: {},         // AI が投資したユニット個別レベル {key: レベル}（VERSUS限定）
+    aiUpgrades: {},           // AI が購入した全体強化（強化タブ）の回数 {key: 回数}（NORMAL/HARD限定）
     nextId: 1,
 
     units: [],                // バトル中のユニット実体
@@ -127,25 +128,28 @@ function toast(msg) {
 // ============================================================
 // 強化（アップグレード）の効果計算
 // ============================================================
-const upCount     = k => state.upgrades[k] || 0;
-const rateMult    = () => Math.max(RATE_MULT_MIN, 1 - 0.10 * upCount('atk_speed'));
-const moveMult    = () => Math.min(MOVE_MULT_CAP, 1 + 0.10 * upCount('speed_boost'));
-const rangeMult   = () => Math.min(RANGE_MULT_CAP, 1 + 0.10 * upCount('range_ext'));
-const baseBonusHp = () => 250 * upCount('fortified');
-const baseRegen   = () => 5 * upCount('regen');
-const thornsRate  = () => Math.min(0.75, 0.15 * upCount('thorns'));
-const vampireRate = () => Math.min(0.5, 0.10 * upCount('vampire'));
+// 第2引数 ai=true でAI側(state.aiUpgrades)を見る。省略時は従来通りプレイヤー側。
+// AIは元々どの難易度でも強化タブを一切使わなかったため、state.aiUpgradesが
+// 空のままなら全てのai=true呼び出しも自動的に「未購入=効果なし」に落ちる
+const upCount     = (k, ai) => ((ai ? state.aiUpgrades : state.upgrades) || {})[k] || 0;
+const rateMult    = ai => Math.max(RATE_MULT_MIN, 1 - 0.10 * upCount('atk_speed', ai));
+const moveMult    = ai => Math.min(MOVE_MULT_CAP, 1 + 0.10 * upCount('speed_boost', ai));
+const rangeMult   = ai => Math.min(RANGE_MULT_CAP, 1 + 0.10 * upCount('range_ext', ai));
+const baseBonusHp = ai => 250 * upCount('fortified', ai);
+const baseRegen   = ai => 5 * upCount('regen', ai);
+const thornsRate  = ai => Math.min(0.75, 0.15 * upCount('thorns', ai));
+const vampireRate = ai => Math.min(0.5, 0.10 * upCount('vampire', ai));
 
 // 強化タブのうち上限がある5項目について、現在値・上限・到達済みかを
 // まとめる（fortified/regenは加算のみで上限が無いためnullを返す）。
 // ショップ表示と購入時の上限チェックの両方で同じ値を使う
-function upgradeStatus(key) {
+function upgradeStatus(key, ai) {
     switch(key) {
-        case 'atk_speed':   return { pct: Math.round((1 - rateMult()) * 100), cap: Math.round((1 - RATE_MULT_MIN) * 100), maxed: rateMult() <= RATE_MULT_MIN + 1e-9 };
-        case 'speed_boost': return { pct: Math.round((moveMult() - 1) * 100), cap: Math.round((MOVE_MULT_CAP - 1) * 100), maxed: moveMult() >= MOVE_MULT_CAP - 1e-9 };
-        case 'range_ext':   return { pct: Math.round((rangeMult() - 1) * 100), cap: Math.round((RANGE_MULT_CAP - 1) * 100), maxed: rangeMult() >= RANGE_MULT_CAP - 1e-9 };
-        case 'thorns':      return { pct: Math.round(thornsRate() * 100), cap: 75, maxed: thornsRate() >= 0.75 - 1e-9 };
-        case 'vampire':     return { pct: Math.round(vampireRate() * 100), cap: 50, maxed: vampireRate() >= 0.5 - 1e-9 };
+        case 'atk_speed':   return { pct: Math.round((1 - rateMult(ai)) * 100), cap: Math.round((1 - RATE_MULT_MIN) * 100), maxed: rateMult(ai) <= RATE_MULT_MIN + 1e-9 };
+        case 'speed_boost': return { pct: Math.round((moveMult(ai) - 1) * 100), cap: Math.round((MOVE_MULT_CAP - 1) * 100), maxed: moveMult(ai) >= MOVE_MULT_CAP - 1e-9 };
+        case 'range_ext':   return { pct: Math.round((rangeMult(ai) - 1) * 100), cap: Math.round((RANGE_MULT_CAP - 1) * 100), maxed: rangeMult(ai) >= RANGE_MULT_CAP - 1e-9 };
+        case 'thorns':      return { pct: Math.round(thornsRate(ai) * 100), cap: 75, maxed: thornsRate(ai) >= 0.75 - 1e-9 };
+        case 'vampire':     return { pct: Math.round(vampireRate(ai) * 100), cap: 50, maxed: vampireRate(ai) >= 0.5 - 1e-9 };
         default:            return null;
     }
 }
@@ -191,8 +195,8 @@ function enemyPowerMult() {
 }
 
 // 強化・戦術の現在価格（強化は買うたびに高くなる）
-function upgradePrice(key) {
-    return Math.round(UPGRADE_DEFS[key].cost * Math.pow(UPGRADE_PRICE_SCALE, upCount(key)));
+function upgradePrice(key, ai) {
+    return Math.round(UPGRADE_DEFS[key].cost * Math.pow(UPGRADE_PRICE_SCALE, upCount(key, ai)));
 }
 
 // ============================================================
@@ -220,7 +224,7 @@ function layout() {
 class Base {
     constructor(isP) {
         this.isP = isP;
-        this.maxHp = BASE_HP + (isP ? baseBonusHp() : 0);
+        this.maxHp = BASE_HP + baseBonusHp(!isP);
         this.hp = this.maxHp;
         this.radius = BASE_RADIUS;
         this.def = { mass: 999 };
@@ -246,9 +250,10 @@ class Base {
         this.shake = 6;
         addShake(4);
 
-        // 反射装甲（自拠点のみ）
-        if(this.isP && attacker && thornsRate() > 0 && attacker.takeDmg) {
-            attacker.takeDmg(v * thornsRate(), null);
+        // 反射装甲（自陣営が反射装甲を持っている場合。プレイヤー/AIどちらの拠点も対象）
+        const reflectRate = thornsRate(!this.isP);
+        if(attacker && reflectRate > 0 && attacker.takeDmg) {
+            attacker.takeDmg(v * reflectRate, null);
         }
     }
 
@@ -305,9 +310,9 @@ class Unit {
         const ep = isP ? 1 : enemyPowerMult();
         const lm = isP ? unitLevelMult(key) : aiUnitLevelMult(key);
         const mult = isP ? lm : ep * lm; // 攻撃力・HPともこの倍率で伸びる
-        const rm = isP ? rateMult() : 1;
-        const sm = isP ? moveMult() : 1;
-        const gm = isP ? rangeMult() : 1;
+        const rm = rateMult(!isP);
+        const sm = moveMult(!isP);
+        const gm = rangeMult(!isP);
 
         this.max = Math.round(this.def.hp * mult);
         this.hp = this.max;
@@ -607,15 +612,17 @@ class Unit {
         this.hp -= v;
         this.flash = 6;
 
-        // 吸血（プレイヤー側の攻撃のみ）
-        if(attacker && attacker.isP && !attacker.isBase && vampireRate() > 0 && attacker.hp !== undefined) {
-            attacker.hp = Math.min(attacker.max, attacker.hp + v * vampireRate());
+        // 吸血（攻撃側の陣営が吸血の紋章を持っている場合）
+        if(attacker && !attacker.isBase && attacker.hp !== undefined) {
+            const vRate = vampireRate(!attacker.isP);
+            if(vRate > 0) attacker.hp = Math.min(attacker.max, attacker.hp + v * vRate);
         }
         // ユニット固有のドレイン（リッチなど。陣営を問わず発動する個性の一つ）
         applyLifesteal(attacker, v);
-        // 反射装甲（プレイヤー側が受けたダメージのみ）
-        if(attacker && this.isP && thornsRate() > 0 && attacker.takeDmg) {
-            attacker.takeDmg(v * thornsRate(), null);
+        // 反射装甲（自陣営が反射装甲を持っている場合）
+        const reflectRate = thornsRate(!this.isP);
+        if(attacker && reflectRate > 0 && attacker.takeDmg) {
+            attacker.takeDmg(v * reflectRate, null);
         }
 
         if(this.hp <= 0) {
@@ -1228,16 +1235,24 @@ function counteredPool(preset, roster) {
     return base.map(p => ({ key: p.key, w: p.w * (boosts[p.key] || 1) }));
 }
 
-// AIがレベルアップ投資の対象にするユニット種を選ぶ。現在の編成の中で
-// 最も数の多い種類を「主力」とみなす（同数なら「好み」のウェイトで優先）
-function pickAiLevelTarget() {
+// 現在の編成を「主力度」（所持数 × 好みのウェイト）が高い順に並べたユニット
+// 種の一覧を返す。レベル投資対象の選定・購入時の集中バイアスの両方で使う
+function rankAiUnitKeys() {
     const counts = {};
     state.aiRoster.forEach(r => { counts[r.key] = (counts[r.key] || 0) + 1; });
     const keys = Object.keys(counts);
-    if(keys.length === 0) return null;
     const bias = (state.aiPersonality && state.aiPersonality.bias) || {};
     keys.sort((a, b) => (counts[b] * (bias[b] || 1)) - (counts[a] * (bias[a] || 1)));
-    return keys[0];
+    return keys;
+}
+
+// AIがレベルアップ投資の対象にするユニット種を選ぶ。現在の編成の中で
+// 最も数の多い種類を「主力」とみなす（同数なら「好み」のウェイトで優先）。
+// 主力が個別レベル上限に達していたら、次点の種類へ投資先を移す
+// （上限到達後もそこで投資を打ち切らず、2番手・3番手を育てて集中を保つ）
+function pickAiLevelTarget() {
+    const ranked = rankAiUnitKeys();
+    return ranked.find(k => aiUnitLevelMult(k) < UNIT_LEVEL_MULT_CAP) || null;
 }
 
 // まだ編成が無い場合(VERSUSの1ラウンド目、SURVIVALの毎ラウンド組み直し直後)の
@@ -1377,6 +1392,45 @@ function buildAiRoster() {
             }
         }
 
+        // 全体強化(強化タブ)への投資。「使えるなら使ってほしい」という要望を
+        // 受けてNORMAL/HARDに解禁した(元々どの難易度も一切使っていなかった)。
+        // ユニット個別レベル投資と同じく、取り分けず実際に使った分だけを
+        // その場でaiGoldから払うライブ消費方式にする
+        if((state.mode === 'versus' || state.mode === 'survival') && preset.upgradeInvestRatio > 0) {
+            let upgradeBudget = Math.round(roundIncome * preset.upgradeInvestRatio);
+            let guardU = 20;
+            while(upgradeBudget > 0 && state.aiGold > 0 && guardU-- > 0) {
+                const affordable = AI_UPGRADE_PRIORITY.filter(p => {
+                    const status = upgradeStatus(p.key, true);
+                    if(status && status.maxed) return false;
+                    return upgradePrice(p.key, true) <= Math.min(upgradeBudget, state.aiGold);
+                });
+                if(affordable.length === 0) break;
+                const total = affordable.reduce((sum, p) => sum + p.w, 0);
+                let r = Math.random() * total;
+                let pick = affordable[affordable.length - 1];
+                for(const p of affordable) { r -= p.w; if(r <= 0) { pick = p; break; } }
+                const cost = upgradePrice(pick.key, true);
+                state.aiGold -= cost;
+                upgradeBudget -= cost;
+                state.aiUpgrades[pick.key] = (state.aiUpgrades[pick.key] || 0) + 1;
+            }
+        }
+
+        // 購入ウェイトの集中バイアス。「レベルを上げた得意ユニットを追加購入せず
+        // 新しい種類ばかり出して非効率」という指摘を受け、主力(上位1〜2種)の
+        // 購入ウェイトを底上げする(EASYはpurchaseConcentration=1で無効)
+        const concentration = preset.purchaseConcentration || 1;
+        if(concentration > 1) {
+            const ranked = rankAiUnitKeys();
+            const primary = ranked[0], secondary = ranked[1];
+            pool = pool.map(p => {
+                if(p.key === primary) return { key: p.key, w: p.w * concentration };
+                if(p.key === secondary) return { key: p.key, w: p.w * (1 + (concentration - 1) * 0.5) };
+                return p;
+            });
+        }
+
         const cap = maxUnitsFor(state.mode);
 
         // まず購入だけを行う（配置は全種類が出揃ってから決める）
@@ -1507,11 +1561,15 @@ function enterPrep() {
     // 少しずつ減っていき、途中でゼロになった後も試合が続く違和感の解消
     if(state.mode === 'survival') state.aiLife = SURVIVAL_LIFE;
 
+    // AI編成の構築(全体強化の購入含む)を先に済ませてから拠点を作る。
+    // 拠点のmaxHpはbaseBonusHp()を見るため、今ラウンドAIが「城壁補強」を
+    // 買った分もここで拠点に反映されるようにするための順序
+    if(isVsMode()) buildAiRoster();
+
     // 拠点は毎ラウンド全回復した状態で始まる
     state.playerBase = new Base(true);
     state.enemyBase = isVsMode() ? new Base(false) : null;
 
-    if(isVsMode()) buildAiRoster();
     if(state.mode === 'story') buildStoryEnemyPreview();
     clampRosters();
 
@@ -1519,7 +1577,7 @@ function enterPrep() {
     state.snapshot = JSON.stringify({
         round: state.round, gold: state.gold,
         roster: state.roster, aiRoster: state.aiRoster, aiGold: state.aiGold,
-        aiPower: state.aiPower, aiUnitLevels: state.aiUnitLevels,
+        aiPower: state.aiPower, aiUnitLevels: state.aiUnitLevels, aiUpgrades: state.aiUpgrades,
         playerLife: state.playerLife, aiLife: state.aiLife,
         upgrades: state.upgrades, unitLevels: state.unitLevels, tactics: state.tactics, nextId: state.nextId,
         storyEnemies: state.storyEnemies
@@ -2030,6 +2088,7 @@ function retryRound() {
     state.aiGold = s.aiGold;
     state.aiPower = s.aiPower || 1;
     state.aiUnitLevels = s.aiUnitLevels || {};
+    state.aiUpgrades = s.aiUpgrades || {};
     state.playerLife = s.playerLife;
     state.aiLife = s.aiLife;
     state.upgrades = s.upgrades;
@@ -2080,6 +2139,7 @@ function startNewGame(mode) {
     state.aiGold = 0;
     state.aiPower = 1;
     state.aiUnitLevels = {};
+    state.aiUpgrades = {};
     state.aiNote = '';
     // AI の「好み」を試合開始時に1つ抽選する（試合中は固定。STORYは対象外）
     state.aiPersonality = (mode === 'story') ? null
@@ -2136,7 +2196,7 @@ function saveGame() {
             mode: state.mode, difficulty: state.difficulty, storyExtra: state.storyExtra,
             round: state.round, gold: state.gold,
             roster: state.roster, aiRoster: state.aiRoster, aiGold: state.aiGold,
-            aiPower: state.aiPower, aiUnitLevels: state.aiUnitLevels,
+            aiPower: state.aiPower, aiUnitLevels: state.aiUnitLevels, aiUpgrades: state.aiUpgrades,
             playerLife: state.playerLife, aiLife: state.aiLife,
             aiPersonalityName: state.aiPersonality ? state.aiPersonality.name : null,
             upgrades: state.upgrades, unitLevels: state.unitLevels, tactics: state.tactics, nextId: state.nextId,
@@ -2168,6 +2228,7 @@ function loadGame() {
         state.aiGold = s.aiGold || 0;
         state.aiPower = s.aiPower || 1;
         state.aiUnitLevels = s.aiUnitLevels || {};
+        state.aiUpgrades = s.aiUpgrades || {};
         state.playerLife = s.playerLife === undefined ? VERSUS_LIFE : s.playerLife;
         state.aiLife = s.aiLife === undefined ? VERSUS_LIFE : s.aiLife;
         state.aiPersonality = AI_PERSONALITIES.find(p => p.name === s.aiPersonalityName) || null;
@@ -2196,7 +2257,7 @@ function loadGame() {
         state.snapshot = JSON.stringify({
             round: state.round, gold: state.gold,
             roster: state.roster, aiRoster: state.aiRoster, aiGold: state.aiGold,
-            aiPower: state.aiPower, aiUnitLevels: state.aiUnitLevels,
+            aiPower: state.aiPower, aiUnitLevels: state.aiUnitLevels, aiUpgrades: state.aiUpgrades,
             playerLife: state.playerLife, aiLife: state.aiLife,
             upgrades: state.upgrades, unitLevels: state.unitLevels, tactics: state.tactics, nextId: state.nextId,
             storyEnemies: state.storyEnemies
@@ -2423,6 +2484,52 @@ function buildBossCard() {
     return card;
 }
 
+// 敵拠点をタップした時に出すAI情報カード（VERSUS/SURVIVAL限定）。
+// 「相手の全体強化が見えない」との指摘を受け、傾向・主力ユニット・
+// 全体強化の購入状況をまとめて見えるようにする
+function buildAiInfoCard() {
+    const preset = AI_PRESETS[state.difficulty];
+    const personality = state.aiPersonality ? state.aiPersonality.name : 'なし（STORY等）';
+
+    const ranked = rankAiUnitKeys();
+    const mainUnits = ranked
+        .filter(k => aiUnitLevel(k) > 0)
+        .slice(0, 3)
+        .map(k => `${UNIT_DEFS[k].name} Lv.${aiUnitLevel(k) + 1}`);
+
+    const upgradeLines = Object.keys(state.aiUpgrades || {})
+        .filter(k => state.aiUpgrades[k] > 0 && UPGRADE_DEFS[k])
+        .map(k => `${UPGRADE_DEFS[k].icon}${UPGRADE_DEFS[k].name}×${state.aiUpgrades[k]}`);
+
+    const card = document.createElement('div');
+    card.className = 'shop-card';
+
+    const head = document.createElement('div');
+    head.className = 'card-head';
+    head.appendChild(spriteIconCanvas(SPRITES.castle, PALETTES.castle_enemy));
+    const id = document.createElement('div');
+    id.className = 'card-id';
+    id.innerHTML = `
+        <div class="card-name">敵情報</div>
+        <div class="card-sub"><span class="card-type">${preset ? preset.label : state.difficulty}</span></div>`;
+    head.appendChild(id);
+
+    const body = document.createElement('div');
+    body.innerHTML = `
+        <div class="card-stats">
+            <span><b>傾向</b>${personality}</span>
+            <span><b>編成数</b>${state.aiRoster.length}体</span>
+        </div>
+        <div class="card-comment">
+            <b>主力ユニット</b>: ${mainUnits.length ? mainUnits.join(' / ') : 'まだ無し'}<br>
+            <b>全体強化</b>: ${upgradeLines.length ? upgradeLines.join(' / ') : '未購入'}
+        </div>`;
+
+    card.appendChild(head);
+    card.appendChild(body);
+    return card;
+}
+
 // ユニット種別レベルアップの購入
 function buyUnitLevel(key) {
     // 1体も配置していない種類は先にレベルを上げられないようにする。
@@ -2556,9 +2663,14 @@ function showUnitInfo(key, isP, sx, sy, sellEntry) {
 
     const side = document.createElement('div');
     side.className = 'info-side ' + (isP ? 'mine' : 'foe');
-    side.textContent = isP ? '▲ 味方ユニット' : (key === '__boss__' ? '▼ ボス' : '▼ 敵ユニット');
+    side.textContent = isP ? '▲ 味方ユニット'
+        : (key === '__boss__' ? '▼ ボス' : (key === '__enemyBase__' ? '▼ 敵情報' : '▼ 敵ユニット'));
     box.appendChild(side);
-    box.appendChild(key === '__boss__' ? buildBossCard() : buildUnitCard(key, { showCost: false, enemy: !isP }));
+    box.appendChild(
+        key === '__boss__' ? buildBossCard()
+        : key === '__enemyBase__' ? buildAiInfoCard()
+        : buildUnitCard(key, { showCost: false, enemy: !isP })
+    );
 
     if(sellEntry) {
         const sell = document.createElement('button');
@@ -2604,8 +2716,22 @@ function bossHitAt(sprite, scale, cx, cy, x, y) {
     return Math.abs(cx - x) <= halfW && (cy - y) >= -8 && (cy - y) <= h + 8;
 }
 
+// 拠点（城）へのタップ判定。Base.draw()と同じ「y+16 が足元」の座標系で判定する
+function baseHitAt(base, x, y) {
+    if(!base) return false;
+    const box = getSpriteBox(SPRITES.castle);
+    const footY = base.y + 16;
+    const halfW = box.w * base.scale / 2 + 8;
+    const h = box.h * base.scale;
+    return Math.abs(base.x - x) <= halfW && (footY - y) >= -8 && (footY - y) <= h + 12;
+}
+
 // 指定座標にいるユニット（準備フェーズは編成データ、バトル中は実体）を探す
 function unitAtPoint(x, y) {
+    // 敵拠点をタップしたらAIの傾向・主力ユニット・全体強化を見られるようにする
+    // （VERSUS/SURVIVAL限定。バトル中・準備フェーズどちらでもタップ可能）
+    if(baseHitAt(state.enemyBase, x, y)) return { key: '__enemyBase__', isP: false };
+
     // バトル中は実際に動いているユニットから探す
     if(state.scene === 'battle') {
         if(state.boss && bossHitAt(state.boss.sprite, state.boss.scale, state.boss.x, state.boss.y, x, y)) {
@@ -3076,6 +3202,7 @@ function updateBattle(dt) {
 
     // 拠点の自動修復
     if(baseRegen() > 0) state.playerBase.heal(baseRegen() / 60 * dt);
+    if(state.enemyBase && baseRegen(true) > 0) state.enemyBase.heal(baseRegen(true) / 60 * dt);
 
     // 死亡したユニットを取り除く（編成同期のため実体は残さない）
     state.units = state.units.filter(u => u.hp > 0);
