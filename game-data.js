@@ -594,25 +594,52 @@ const AI_PRESETS = {
     easy: {
         label:'EASY', desc:'安くて数の多い編成',
         budgetMult:1.5, powerStep:0.02, counterStrength:0, levelInvestRatio:0,
+        purchaseConcentration:1, upgradeInvestRatio:0,
         pool:[{key:'goblin', w:6}, {key:'orc', w:2}, {key:'skeleton', w:2}, {key:'imp', w:1}]
     },
     normal: {
         label:'NORMAL', desc:'バランス型。こちらの編成も見てくる',
         budgetMult:0.92, powerStep:0.02, counterStrength:0.3, levelInvestRatio:0.2,
+        // 主力ユニット(レベル投資対象)の購入ウェイトを底上げする倍率。
+        // 「レベルを上げた得意ユニットを追加購入せず新しい種類を出し続けて
+        // 非効率」という指摘を受け、購入を主力へ寄せる(HARDより控えめ)
+        purchaseConcentration:2.2,
+        // 全体強化(強化タブ)への投資比率。NORMALにも一部反映。
+        // VERSUSの収入(80〜320G+)基準では0.08だと最安の強化(35G)にすら
+        // 何ラウンドも届かず実質使われなかったため0.15に引き上げた
+        upgradeInvestRatio:0.15,
         pool:[{key:'knight', w:3}, {key:'archer', w:3}, {key:'orc', w:2},
               {key:'skeleton', w:2}, {key:'goblin', w:2}, {key:'wizard', w:1},
               {key:'warlord', w:1}, {key:'lich', w:1}, {key:'imp', w:1},
               {key:'stoneGuardian', w:1}, {key:'graveLord', w:1}, {key:'sentry', w:1}]
     },
     hard: {
-        label:'HARD', desc:'高コスト特化。初手から本気で対策し、勝ちにくる',
-        budgetMult:1.3, powerStep:0.06, counterStrength:0.8, levelInvestRatio:0.45,
+        label:'HARD', desc:'理論上最強。主力ユニットに集中投資し、全体強化も使いこなす',
+        budgetMult:1.3, powerStep:0.06,
+        // 「対策しようとしすぎて非効率」との指摘を受け0.8→0.6に緩和。
+        // 対策自体は残しつつ、purchaseConcentrationによる主力集中を上回って
+        // 編成を薄めてしまわない程度に強さを落とした
+        counterStrength:0.6, levelInvestRatio:0.45,
+        purchaseConcentration:4,
+        upgradeInvestRatio:0.18,
         pool:[{key:'wizard', w:3}, {key:'giant', w:2}, {key:'knight', w:2},
               {key:'archer', w:2}, {key:'healer', w:1}, {key:'orc', w:1},
               {key:'warlord', w:2}, {key:'lich', w:2}, {key:'drake', w:2}, {key:'imp', w:1},
               {key:'stoneGuardian', w:1}, {key:'graveLord', w:2}, {key:'sentry', w:2}]
     }
 };
+
+// AIが全体強化(強化タブ)を買う際の優先度。どの編成にも効く速射・射程を
+// 優先し、状況依存の反射装甲・吸血は控えめにする(理論上の汎用性重視)
+const AI_UPGRADE_PRIORITY = [
+    { key:'atk_speed',   w:3 },
+    { key:'range_ext',   w:2.5 },
+    { key:'speed_boost', w:1.5 },
+    { key:'fortified',   w:1 },
+    { key:'regen',       w:1 },
+    { key:'thorns',      w:0.8 },
+    { key:'vampire',     w:0.8 }
+];
 
 // ============================================================
 // VERSUSラウンド1限定の「開始パターン」
