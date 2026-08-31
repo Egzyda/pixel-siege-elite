@@ -199,6 +199,16 @@ function upgradePrice(key, ai) {
     return Math.round(UPGRADE_DEFS[key].cost * Math.pow(UPGRADE_PRICE_SCALE, upCount(key, ai)));
 }
 
+// 0回からlevel回まで購入するのにかかった累計金額。SURVIVALのメカベラム方式
+// (毎ラウンド組み直し)でAIの全体強化を返金する際に使う
+function totalUpgradeSpent(key, level) {
+    let sum = 0;
+    for(let lv = 0; lv < level; lv++) {
+        sum += Math.round(UPGRADE_DEFS[key].cost * Math.pow(UPGRADE_PRICE_SCALE, lv));
+    }
+    return sum;
+}
+
 // ============================================================
 // フィールドのレイアウト計算
 // ============================================================
@@ -1336,6 +1346,16 @@ function buildAiRoster() {
         state.aiRoster.forEach(r => { state.aiGold += aiUnitBuyCost(r.key); });
         state.aiRoster = [];
         state.aiUnitLevels = {}; // 毎ラウンド資金全額で組み直す方式に合わせ、個別レベル投資もリセットする
+        // v2.17で追加した全体強化(aiUpgrades)がここでリセットされておらず、
+        // 「自動修復」「城壁補強」等の無上限項目がラウンドをまたいで無限に
+        // 積み上がるバグになっていた(SURVIVAL HARD 4面で拠点が実質不死身に
+        // なり進行不能になった報告の原因)。個別レベルと同じくメカベラム方式
+        // (毎ラウンド資金全額で一から組み直す)に揃え、使った分は実勢価格で
+        // 返金してからリセットする(返金し忘れるとv2.16と同種の経済ロスになるため)
+        Object.keys(state.aiUpgrades).forEach(key => {
+            state.aiGold += totalUpgradeSpent(key, state.aiUpgrades[key]);
+        });
+        state.aiUpgrades = {};
     }
 
     const preset = AI_PRESETS[state.difficulty];
@@ -3198,11 +3218,17 @@ function updateBattle(dt) {
 
     state.playerBase.update(dt);
     if(state.enemyBase) state.enemyBase.update(dt);
-    updateSiegeCollapse(dt);
 
-    // 拠点の自動修復
+    // 拠点の自動修復。防衛崩壊(updateSiegeCollapse)より必ず先に適用する。
+    // 崩壊はMath.max(0, hp - 大きな減少量)でHPを0に叩き落とすが、この
+    // 回復を後に置くと崩壊直後の0Hpに自動修復がわずかに上乗せしてしまい、
+    // checkBattleEnd()の hp<=0 判定が永遠に成立せず拠点が壊れなくなる
+    // バグがあった(SURVIVAL HARDで自動修復を持つAIの拠点が同じHPで
+    // 止まり続けて進行不能になる報告があった)。崩壊を必ず後に置くことで、
+    // 崩壊の減少量(全体の1/90)が自動修復を確実に上回り、0で確定する
     if(baseRegen() > 0) state.playerBase.heal(baseRegen() / 60 * dt);
     if(state.enemyBase && baseRegen(true) > 0) state.enemyBase.heal(baseRegen(true) / 60 * dt);
+    updateSiegeCollapse(dt);
 
     // 死亡したユニットを取り除く（編成同期のため実体は残さない）
     state.units = state.units.filter(u => u.hp > 0);
