@@ -464,19 +464,18 @@ function currentBossDefs() {
 const UPGRADE_PRICE_SCALE = 1.12;
 
 // 攻撃力・HPの育成はユニット個別レベル（下記）に一本化してある。
-// 「強化」タブは、個別レベルと重複しない項目（速度・射程・拠点系）のみを扱う
+// 「強化」タブは、個別レベルと重複しない項目（速度・射程・特殊効果）のみを扱う。
+// 拠点系(城壁補強・自動修復)は、ステージ上ユニットを無視して拠点だけを
+// 狙う展開がほぼ起きず実質無意味だったため、v2.19で削除した
 const UPGRADE_DEFS = {
     atk_speed:   { name:'速射訓練', icon:'⚡', cost:45, desc:'攻撃間隔 -10%（上限-50%。攻撃が速くなる）' },
     speed_boost: { name:'進軍訓練', icon:'💨', cost:35, desc:'全ユニットの移動速度 +10%（上限+60%）' },
     range_ext:   { name:'射程延長', icon:'🎯', cost:40, desc:'遠距離・範囲ユニットの射程 +10%（上限+50%）' },
-    fortified:   { name:'城壁補強', icon:'🏰', cost:45, desc:'自拠点の最大HP +250' },
-    regen:       { name:'自動修復', icon:'🔧', cost:40, desc:'自拠点のHPが毎秒5回復' },
     thorns:      { name:'反射装甲', icon:'🛡️', cost:40, desc:'味方が受けたダメージの15%を反射（上限75%）' },
     vampire:     { name:'吸血の紋章', icon:'🧛', cost:40, desc:'与えたダメージの10%を自己回復（上限50%）' }
 };
 
 // 複利で伸びる項目は thorns/vampire と同様に上限を設ける
-// （fortified/regen は加算のみで際限なく伸びないため対象外）
 const RATE_MULT_MIN = 0.5;  // 攻撃間隔は最短でも元の50%まで
 const MOVE_MULT_CAP = 1.6;  // 移動速度 最大 +60%
 const RANGE_MULT_CAP = 1.5; // 射程 最大 +50%
@@ -635,8 +634,6 @@ const AI_UPGRADE_PRIORITY = [
     { key:'atk_speed',   w:3 },
     { key:'range_ext',   w:2.5 },
     { key:'speed_boost', w:1.5 },
-    { key:'fortified',   w:1 },
-    { key:'regen',       w:1 },
     { key:'thorns',      w:0.8 },
     { key:'vampire',     w:0.8 }
 ];

@@ -135,13 +135,10 @@ const upCount     = (k, ai) => ((ai ? state.aiUpgrades : state.upgrades) || {})[
 const rateMult    = ai => Math.max(RATE_MULT_MIN, 1 - 0.10 * upCount('atk_speed', ai));
 const moveMult    = ai => Math.min(MOVE_MULT_CAP, 1 + 0.10 * upCount('speed_boost', ai));
 const rangeMult   = ai => Math.min(RANGE_MULT_CAP, 1 + 0.10 * upCount('range_ext', ai));
-const baseBonusHp = ai => 250 * upCount('fortified', ai);
-const baseRegen   = ai => 5 * upCount('regen', ai);
 const thornsRate  = ai => Math.min(0.75, 0.15 * upCount('thorns', ai));
 const vampireRate = ai => Math.min(0.5, 0.10 * upCount('vampire', ai));
 
-// 強化タブのうち上限がある5項目について、現在値・上限・到達済みかを
-// まとめる（fortified/regenは加算のみで上限が無いためnullを返す）。
+// 強化タブの各項目について、現在値・上限・到達済みかをまとめる。
 // ショップ表示と購入時の上限チェックの両方で同じ値を使う
 function upgradeStatus(key, ai) {
     switch(key) {
@@ -234,7 +231,7 @@ function layout() {
 class Base {
     constructor(isP) {
         this.isP = isP;
-        this.maxHp = BASE_HP + baseBonusHp(!isP);
+        this.maxHp = BASE_HP;
         this.hp = this.maxHp;
         this.radius = BASE_RADIUS;
         this.def = { mass: 999 };
@@ -1581,14 +1578,11 @@ function enterPrep() {
     // 少しずつ減っていき、途中でゼロになった後も試合が続く違和感の解消
     if(state.mode === 'survival') state.aiLife = SURVIVAL_LIFE;
 
-    // AI編成の構築(全体強化の購入含む)を先に済ませてから拠点を作る。
-    // 拠点のmaxHpはbaseBonusHp()を見るため、今ラウンドAIが「城壁補強」を
-    // 買った分もここで拠点に反映されるようにするための順序
-    if(isVsMode()) buildAiRoster();
-
     // 拠点は毎ラウンド全回復した状態で始まる
     state.playerBase = new Base(true);
     state.enemyBase = isVsMode() ? new Base(false) : null;
+
+    if(isVsMode()) buildAiRoster();
 
     if(state.mode === 'story') buildStoryEnemyPreview();
     clampRosters();
@@ -2849,11 +2843,6 @@ function buyUpgrade(key) {
     state.gold -= price;
     state.upgrades[key] = upCount(key) + 1;
 
-    // 拠点強化はその場で反映する
-    if(key === 'fortified') {
-        state.playerBase.maxHp += 400;
-        state.playerBase.hp += 400;
-    }
     toast(`${UPGRADE_DEFS[key].name} を購入`);
     renderShop();
     saveGame();
@@ -2938,10 +2927,6 @@ function undoLastAction() {
     state.unitLevels = snap.unitLevels || {};
     state.tactics = snap.tactics;
     state.selected = null;
-
-    // 拠点強化(fortified)の反映数もアップグレード数に合わせて再計算する
-    state.playerBase.maxHp = BASE_HP + baseBonusHp();
-    state.playerBase.hp = Math.min(state.playerBase.hp, state.playerBase.maxHp);
 
     toast('ひとつ前の状態に戻しました');
     renderShop();
@@ -3218,16 +3203,6 @@ function updateBattle(dt) {
 
     state.playerBase.update(dt);
     if(state.enemyBase) state.enemyBase.update(dt);
-
-    // 拠点の自動修復。防衛崩壊(updateSiegeCollapse)より必ず先に適用する。
-    // 崩壊はMath.max(0, hp - 大きな減少量)でHPを0に叩き落とすが、この
-    // 回復を後に置くと崩壊直後の0Hpに自動修復がわずかに上乗せしてしまい、
-    // checkBattleEnd()の hp<=0 判定が永遠に成立せず拠点が壊れなくなる
-    // バグがあった(SURVIVAL HARDで自動修復を持つAIの拠点が同じHPで
-    // 止まり続けて進行不能になる報告があった)。崩壊を必ず後に置くことで、
-    // 崩壊の減少量(全体の1/90)が自動修復を確実に上回り、0で確定する
-    if(baseRegen() > 0) state.playerBase.heal(baseRegen() / 60 * dt);
-    if(state.enemyBase && baseRegen(true) > 0) state.enemyBase.heal(baseRegen(true) / 60 * dt);
     updateSiegeCollapse(dt);
 
     // 死亡したユニットを取り除く（編成同期のため実体は残さない）
